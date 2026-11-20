@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View } from "react-native";
-import type { PaseoAgent } from "@getpaseo/client";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { usePaseo, useTabState, type PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { FlatList, Icon, Loading, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
@@ -43,7 +42,9 @@ import {
 } from "./turn-model";
 
 type PaseoClient = ReturnType<typeof usePaseo>;
-type AgentListSubscription = Awaited<ReturnType<PaseoClient["agents"]["list"]>>["subscription"];
+type AgentListResult = Awaited<ReturnType<PaseoClient["agents"]["list"]>>;
+type AgentListSubscription = AgentListResult["subscription"];
+type ListedAgent = AgentListResult["entries"][number]["agent"];
 
 interface AgentLite {
   id: string;
@@ -58,7 +59,7 @@ const tabStateSchema = z.object({
   statusFilter: z.enum(["all", "running", "failed"]).optional(),
 });
 
-function toAgentLite(agent: PaseoAgent): AgentLite {
+function toAgentLite(agent: ListedAgent): AgentLite {
   return {
     id: agent.id,
     title: agent.title?.trim() || "Untitled agent",

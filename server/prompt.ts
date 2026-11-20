@@ -1,4 +1,3 @@
-import type { PaseoAgent, PaseoApi } from "@getpaseo/client";
 import type { RpcInput, RpcOutput } from "@getpaseo/plugin";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { existsSync } from "node:fs";
@@ -109,7 +108,15 @@ export async function getAgentPromptHandler(
   }
 }
 
-async function resolveAgent(paseo: PaseoApi, agentId: string): Promise<PaseoAgent | null> {
+type HandlerPaseoApi = PluginHandlerContext["paseo"];
+type ResolvedAgent = Awaited<
+  ReturnType<HandlerPaseoApi["agents"]["list"]>
+>["entries"][number]["agent"];
+
+async function resolveAgent(
+  paseo: HandlerPaseoApi,
+  agentId: string,
+): Promise<ResolvedAgent | null> {
   try {
     const result = await paseo.agents.ref(agentId).refresh();
     if (result?.agent) return result.agent;
