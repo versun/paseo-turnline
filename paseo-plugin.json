@@ -1,0 +1,9 @@
+{
+  "id": "turnline",
+  "name": "Turnline",
+  "description": "Inspect every agent turn in a workspace: prompt, thinking, tool calls, replies, token usage, and duration, on a reversible timeline.",
+  "media": [],
+  "requirements": {
+    "paseo": ">=0.15.4"
+  }
+}
