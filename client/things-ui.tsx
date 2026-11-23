@@ -280,6 +280,7 @@ export function TagPill({
           color: selected ? activeColor : theme.colors.foregroundMuted,
           fontSize: 12,
           fontWeight: selected ? "600" : "500",
+          maxWidth: 180,
         }}
         numberOfLines={1}
       >

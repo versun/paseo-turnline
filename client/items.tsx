@@ -742,6 +742,7 @@ export function ItemRow({
         onPress={d.expandable ? onToggle : undefined}
         disabled={!d.expandable}
         accessibilityRole={d.expandable ? "button" : undefined}
+        accessibilityState={d.expandable ? { expanded } : undefined}
         style={(state) => ({
           flexDirection: "row",
           alignItems: "center",

@@ -42,7 +42,6 @@ import {
   type StatusFilter,
   type Turn,
   type TurnStatus,
-  type TurnSummary,
 } from "./turn-model";
 
 type PaseoClient = ReturnType<typeof usePaseo>;
@@ -75,8 +74,12 @@ function toAgentLite(agent: ListedAgent): AgentLite {
 function hasTokenUsage(usage: Turn["usage"]): boolean {
   if (!usage) return false;
   return (
-    (typeof usage.inputTokens === "number" && Number.isFinite(usage.inputTokens)) ||
-    (typeof usage.outputTokens === "number" && Number.isFinite(usage.outputTokens))
+    (typeof usage.inputTokens === "number" &&
+      Number.isFinite(usage.inputTokens) &&
+      usage.inputTokens >= 0) ||
+    (typeof usage.outputTokens === "number" &&
+      Number.isFinite(usage.outputTokens) &&
+      usage.outputTokens >= 0)
   );
 }
 
@@ -179,7 +182,9 @@ function MetaRow({
   theme: PluginTheme;
   style?: StyleProp<ViewStyle>;
 }) {
-  const visible = items.filter((item) => item !== null && item !== undefined && item !== false);
+  const visible = items.filter(
+    (item) => item !== null && item !== undefined && typeof item !== "boolean" && item !== "",
+  );
   if (visible.length === 0) return null;
   return (
     <View
@@ -200,6 +205,73 @@ function MetaRow({
       ))}
     </View>
   );
+}
+
+function buildStatusMetaItem(
+  turn: Turn,
+  theme: PluginTheme,
+  tokens: ThingsTokens,
+): ReactNode {
+  const showStatusWord =
+    turn.status === "running" ||
+    turn.status === "canceled" ||
+    (turn.status === "failed" && !turn.error);
+  if (!showStatusWord) return null;
+  return (
+    <Text
+      style={{
+        color: statusTone(turn.status, theme, tokens).fg,
+        fontSize: 11.5,
+        fontWeight: "600",
+      }}
+    >
+      {turn.status === "running" ? "Running…" : STATUS_LABEL[turn.status]}
+    </Text>
+  );
+}
+
+function buildUsageMetaItems({
+  duration,
+  usage,
+  cacheRate,
+  contextRatio,
+  costText,
+  theme,
+}: {
+  duration: number | null;
+  usage: Turn["usage"];
+  cacheRate: number | null;
+  contextRatio?: number | null;
+  costText: string;
+  theme: PluginTheme;
+}): ReactNode[] {
+  const mutedStyle = {
+    color: theme.colors.foregroundMuted,
+    fontSize: 11.5,
+    fontVariant: ["tabular-nums"] as ("tabular-nums")[],
+  };
+  const contextColor =
+    contextRatio != null && contextRatio > 0.85
+      ? theme.colors.statusDanger
+      : contextRatio != null && contextRatio > 0.65
+        ? theme.colors.statusWarning
+        : theme.colors.foregroundMuted;
+
+  return [
+    duration !== null && <Text style={mutedStyle}>{formatDuration(duration)}</Text>,
+    hasTokenUsage(usage) && usage && (
+      <Text style={mutedStyle}>
+        ↓{formatTokens(usage.inputTokens)} ↑{formatTokens(usage.outputTokens)}
+      </Text>
+    ),
+    cacheRate !== null && <Text style={mutedStyle}>{formatCacheRate(cacheRate)} cache</Text>,
+    contextRatio != null && (
+      <Text style={[mutedStyle, { color: contextColor }]}>
+        {Math.round(Math.max(0, contextRatio) * 100)}% ctx
+      </Text>
+    ),
+    costText ? <Text style={mutedStyle}>{costText}</Text> : null,
+  ];
 }
 
 /**
@@ -242,8 +314,9 @@ function TurnRowCard({
         turn={turn}
         itemUsages={itemUsages}
         agentTitle={agentTitle}
-        summary={summary}
+        lastReplyIndex={summary.lastReplyIndex}
         duration={duration}
+        cacheRate={cacheRate}
         costText={costText}
         theme={theme}
         tokens={tokens}
@@ -254,24 +327,10 @@ function TurnRowCard({
     );
   }
 
-  const showStatusWord =
-    turn.status === "running" ||
-    turn.status === "canceled" ||
-    (turn.status === "failed" && !turn.error);
-
+  const timeLabel = formatTimeOnly(turn.startedAt);
   const metaItems: ReactNode[] = [
-    showStatusWord && (
-      <Text
-        style={{
-          color: statusTone(turn.status, theme, tokens).fg,
-          fontSize: 11.5,
-          fontWeight: "600",
-        }}
-      >
-        {turn.status === "running" ? "Running…" : STATUS_LABEL[turn.status]}
-      </Text>
-    ),
-    showCollapsedAgentTag && agentTitle && (
+    buildStatusMetaItem(turn, theme, tokens),
+    showCollapsedAgentTag && agentTitle ? (
       <Text
         style={{
           color: theme.colors.foregroundMuted,
@@ -283,7 +342,7 @@ function TurnRowCard({
       >
         {agentTitle}
       </Text>
-    ),
+    ) : null,
     summary.toolCount > 0 && (
       <Text
         style={{
@@ -299,50 +358,7 @@ function TurnRowCard({
         {summary.failedToolCount > 0 ? ` (${summary.failedToolCount} failed)` : ""}
       </Text>
     ),
-    duration !== null && (
-      <Text
-        style={{
-          color: theme.colors.foregroundMuted,
-          fontSize: 11.5,
-          fontVariant: ["tabular-nums"],
-        }}
-      >
-        {formatDuration(duration)}
-      </Text>
-    ),
-    hasTokenUsage(usage) && usage && (
-      <Text
-        style={{
-          color: withAlpha(theme.colors.foregroundMuted, 0.85),
-          fontSize: 11.5,
-          fontVariant: ["tabular-nums"],
-        }}
-      >
-        ↓{formatTokens(usage.inputTokens)} ↑{formatTokens(usage.outputTokens)}
-      </Text>
-    ),
-    cacheRate !== null && (
-      <Text
-        style={{
-          color: withAlpha(theme.colors.foregroundMuted, 0.85),
-          fontSize: 11.5,
-          fontVariant: ["tabular-nums"],
-        }}
-      >
-        {formatCacheRate(cacheRate)} cache
-      </Text>
-    ),
-    costText ? (
-      <Text
-        style={{
-          color: withAlpha(theme.colors.foregroundMuted, 0.85),
-          fontSize: 11.5,
-          fontVariant: ["tabular-nums"],
-        }}
-      >
-        {costText}
-      </Text>
-    ) : null,
+    ...buildUsageMetaItems({ duration, usage, cacheRate, costText, theme }),
   ];
 
   return (
@@ -376,16 +392,18 @@ function TurnRowCard({
             >
               {summary.promptTitle}
             </Text>
-            <Text
-              style={{
-                color: withAlpha(theme.colors.foregroundMuted, 0.72),
-                fontSize: 11.5,
-                marginTop: 2,
-                fontVariant: ["tabular-nums"],
-              }}
-            >
-              {formatTimeOnly(turn.startedAt)}
-            </Text>
+            {timeLabel ? (
+              <Text
+                style={{
+                  color: withAlpha(theme.colors.foregroundMuted, 0.72),
+                  fontSize: 11.5,
+                  marginTop: 2,
+                  fontVariant: ["tabular-nums"],
+                }}
+              >
+                {timeLabel}
+              </Text>
+            ) : null}
           </View>
 
           {turn.error ? (
@@ -419,8 +437,9 @@ function ExpandedTurnCard({
   turn,
   itemUsages,
   agentTitle,
-  summary,
+  lastReplyIndex,
   duration,
+  cacheRate,
   costText,
   theme,
   tokens,
@@ -431,8 +450,9 @@ function ExpandedTurnCard({
   turn: Turn;
   itemUsages?: ReadonlyMap<number, ItemUsageDisplay>;
   agentTitle?: string;
-  summary: TurnSummary;
+  lastReplyIndex: number;
   duration: number | null;
+  cacheRate: number | null;
   costText: string;
   theme: PluginTheme;
   tokens: ThingsTokens;
@@ -441,7 +461,6 @@ function ExpandedTurnCard({
   onOpenAgent?: () => void;
 }) {
   const usage = turn.usage;
-  const cacheRate = computeCacheHitRate(usage);
 
   const stepMeta = useMemo(() => {
     const seen = new Map<string, number>();
@@ -457,8 +476,8 @@ function ExpandedTurnCard({
 
   const [openSteps, setOpenSteps] = useState<Set<string>>(() => {
     const initial = new Set<string>();
-    if (summary.lastReplyIndex >= 0 && stepMeta[summary.lastReplyIndex]?.expandable) {
-      initial.add(stepMeta[summary.lastReplyIndex].key);
+    if (lastReplyIndex >= 0 && stepMeta[lastReplyIndex]?.expandable) {
+      initial.add(stepMeta[lastReplyIndex].key);
     }
     return initial;
   });
@@ -489,81 +508,62 @@ function ExpandedTurnCard({
   const rawRatio =
     usage?.contextWindowUsedTokens !== undefined &&
     usage?.contextWindowMaxTokens !== undefined &&
+    usage.contextWindowUsedTokens >= 0 &&
     usage.contextWindowMaxTokens > 0
       ? usage.contextWindowUsedTokens / usage.contextWindowMaxTokens
       : null;
   const contextRatio = rawRatio !== null && Number.isFinite(rawRatio) ? rawRatio : null;
-  const contextColor =
-    contextRatio !== null && contextRatio > 0.85
-      ? theme.colors.statusDanger
-      : contextRatio !== null && contextRatio > 0.65
-        ? theme.colors.statusWarning
-        : theme.colors.foregroundMuted;
-
-  const showExpandedStatus =
-    turn.status === "running" || turn.status === "failed" || turn.status === "canceled";
+  const startedLabel = formatClock(turn.startedAt);
 
   const metaItems: ReactNode[] = [
-    showExpandedStatus && (
-      <Text
-        style={{
-          color: statusTone(turn.status, theme, tokens).fg,
-          fontSize: 11.5,
-          fontWeight: "600",
-        }}
-      >
-        {turn.status === "running" ? "Running…" : STATUS_LABEL[turn.status]}
-      </Text>
-    ),
-    agentTitle &&
-      (onOpenAgent ? (
-        <HoverPressable
-          onPress={onOpenAgent}
-          accessibilityRole="button"
-          style={(state) => ({
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 3,
-            paddingHorizontal: 5,
-            paddingVertical: 1,
-            marginHorizontal: -5,
-            borderRadius: 5,
-            backgroundColor: pressBg(state, tokens),
-          })}
-        >
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11.5, fontWeight: "500" }}>
-            {agentTitle}
-          </Text>
-          <Icon name="ArrowUpRight" size={11} color={theme.colors.foregroundMuted} />
-        </HoverPressable>
-      ) : (
-        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11.5, fontWeight: "500" }}>
-          {agentTitle}
-        </Text>
-      )),
-    turn.startedAt && (
-      <Text
-        style={{
-          color: theme.colors.foregroundMuted,
-          fontSize: 11.5,
-          fontVariant: ["tabular-nums"],
-        }}
-      >
-        {formatClock(turn.startedAt)}
-      </Text>
-    ),
-    duration !== null && (
-      <Text
-        style={{
-          color: theme.colors.foregroundMuted,
-          fontSize: 11.5,
-          fontVariant: ["tabular-nums"],
-        }}
-      >
-        {formatDuration(duration)}
-      </Text>
-    ),
-    hasTokenUsage(usage) && usage && (
+    buildStatusMetaItem(turn, theme, tokens),
+    agentTitle
+      ? onOpenAgent
+        ? (
+            <HoverPressable
+              onPress={onOpenAgent}
+              accessibilityRole="button"
+              accessibilityLabel={`Open agent ${agentTitle}`}
+              style={(state) => ({
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 3,
+                paddingHorizontal: 4,
+                paddingVertical: 1,
+                marginVertical: -1,
+                borderRadius: 5,
+                backgroundColor: pressBg(state, tokens),
+              })}
+            >
+              <Text
+                style={{
+                  color: theme.colors.foregroundMuted,
+                  fontSize: 11.5,
+                  fontWeight: "500",
+                  maxWidth: 200,
+                }}
+                numberOfLines={1}
+              >
+                {agentTitle}
+              </Text>
+              <Icon name="ArrowUpRight" size={11} color={theme.colors.foregroundMuted} />
+            </HoverPressable>
+          )
+        : (
+            <Text
+              style={{
+                color: theme.colors.foregroundMuted,
+                fontSize: 11.5,
+                fontWeight: "500",
+                maxWidth: 200,
+              }}
+              numberOfLines={1}
+            >
+              {agentTitle}
+            </Text>
+          )
+      : null,
+    startedLabel ? (
       <Text
         style={{
           color: theme.colors.foregroundMuted,
@@ -571,43 +571,10 @@ function ExpandedTurnCard({
           fontVariant: ["tabular-nums"],
         }}
       >
-        ↓{formatTokens(usage.inputTokens)} ↑{formatTokens(usage.outputTokens)}
-      </Text>
-    ),
-    cacheRate !== null && (
-      <Text
-        style={{
-          color: theme.colors.foregroundMuted,
-          fontSize: 11.5,
-          fontVariant: ["tabular-nums"],
-        }}
-      >
-        {formatCacheRate(cacheRate)} cache
-      </Text>
-    ),
-    contextRatio !== null && (
-      <Text
-        style={{
-          color: contextColor,
-          fontSize: 11.5,
-          fontVariant: ["tabular-nums"],
-        }}
-      >
-        {Math.round(Math.max(0, contextRatio) * 100)}% ctx
-      </Text>
-    ),
-    costText ? (
-      <Text
-        style={{
-          color: theme.colors.foregroundMuted,
-          fontSize: 11.5,
-          fontWeight: "500",
-          fontVariant: ["tabular-nums"],
-        }}
-      >
-        {costText}
+        {startedLabel}
       </Text>
     ) : null,
+    ...buildUsageMetaItems({ duration, usage, cacheRate, contextRatio, costText, theme }),
   ];
 
   return (
@@ -974,6 +941,7 @@ export function TurnsPanel({
           paddingHorizontal: 14,
           paddingVertical: 6,
           borderRadius: 999,
+          opacity: feedStatus.anyLoadingOlder ? 0.6 : 1,
           backgroundColor: pressBg(state, tokens, tokens.subtlePillBg),
         })}
       >
@@ -995,8 +963,8 @@ export function TurnsPanel({
           paddingHorizontal: layout.compact ? 12 : 24,
         }}
       >
-        {/* View Header */}
-        <View style={{ paddingTop: layout.compact ? 10 : 14, paddingBottom: 8, gap: 8 }}>
+        {/* Toolbar */}
+        <View style={{ paddingTop: layout.compact ? 8 : 10, paddingBottom: 8, gap: 8 }}>
           <View
             style={{
               flexDirection: "row",
@@ -1005,24 +973,13 @@ export function TurnsPanel({
               gap: 10,
             }}
           >
-            <View style={{ flexShrink: 1 }}>
-              <Text
-                style={{
-                  color: theme.colors.foreground,
-                  fontSize: layout.compact ? 18 : 20,
-                  fontWeight: "700",
-                  letterSpacing: -0.3,
-                }}
-              >
-                Turns
-              </Text>
+            <View style={{ flex: 1, minWidth: 0 }}>
               {subtitleParts.length > 0 && (
                 <Text
                   style={{
                     color: theme.colors.foregroundMuted,
-                    fontSize: 11.5,
+                    fontSize: 12,
                     fontVariant: ["tabular-nums"],
-                    marginTop: 1,
                   }}
                   numberOfLines={1}
                 >

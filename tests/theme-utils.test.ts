@@ -47,12 +47,10 @@ describe("theme-utils", () => {
 
   it("builds platform-appropriate monospace fonts and theme tokens", () => {
     const darkIos = createThingsTokens(mockTheme("#09090b"), "ios");
-    assert.equal(darkIos.dark, true);
     assert.equal(darkIos.monoFont, "Menlo");
     assert.equal(darkIos.accentSoft, "rgba(59, 130, 246, 0.16)");
 
     const lightAndroid = createThingsTokens(mockTheme("#ffffff"), "android");
-    assert.equal(lightAndroid.dark, false);
     assert.equal(lightAndroid.monoFont, "monospace");
     assert.equal(lightAndroid.accentSoft, "rgba(59, 130, 246, 0.1)");
 

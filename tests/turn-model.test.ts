@@ -436,8 +436,6 @@ describe("formatting and summarization", () => {
     assert.equal(summary.replyPreview, "Updated parser successfully");
     assert.equal(summary.toolCount, 1);
     assert.equal(summary.failedToolCount, 1);
-    assert.equal(summary.thinkingCount, 1);
-    assert.equal(summary.stepCount, 4);
     assert.equal(summary.lastReplyIndex, 3);
 
     const exported = buildTurnSummaryText(turn, "Coder", new Date(2026, 0, 1, 12, 0));

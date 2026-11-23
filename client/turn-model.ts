@@ -39,8 +39,6 @@ export interface TurnSummary {
   replyPreview?: string;
   toolCount: number;
   failedToolCount: number;
-  thinkingCount: number;
-  stepCount: number;
   lastReplyIndex: number;
 }
 
@@ -941,7 +939,6 @@ export function normalizeInlineText(text: string | undefined): string {
 export function summarizeTurn(turn: Turn, fallbackTitle: string): TurnSummary {
   let toolCount = 0;
   let failedToolCount = 0;
-  let thinkingCount = 0;
   let lastReplyIndex = -1;
   let lastReplyText: string | undefined;
 
@@ -950,8 +947,6 @@ export function summarizeTurn(turn: Turn, fallbackTitle: string): TurnSummary {
     if (item.type === "tool_call") {
       toolCount += 1;
       if (item.status === "failed") failedToolCount += 1;
-    } else if (item.type === "reasoning") {
-      thinkingCount += 1;
     } else if (item.type === "assistant_message" && item.text.trim().length > 0) {
       lastReplyIndex = index;
       lastReplyText = item.text;
@@ -966,8 +961,6 @@ export function summarizeTurn(turn: Turn, fallbackTitle: string): TurnSummary {
     replyPreview: replyPreview && replyPreview !== promptTitle ? replyPreview : undefined,
     toolCount,
     failedToolCount,
-    thinkingCount,
-    stepCount: turn.items.length,
     lastReplyIndex,
   };
 }

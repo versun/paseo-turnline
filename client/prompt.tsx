@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import type { PluginTheme, RpcOutput } from "@getpaseo/plugin";
@@ -45,21 +45,27 @@ export function TurnPrompt({
   tokens: ThingsTokens;
 }) {
   const getPrompt = useRpc(getAgentPrompt);
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [showMessages, setShowMessages] = useState(false);
   const [messagesRequested, setMessagesRequested] = useState(false);
   const [showAllTools, setShowAllTools] = useState(false);
 
+  const knownUnsupported = queryClient
+    .getQueriesData<PromptOutput>({ queryKey: ["turnline-prompt", agentId] })
+    .some(([, data]) => data?.status === "unsupported");
+
   const baseQuery = useQuery({
     queryKey: ["turnline-prompt", agentId, at ?? "latest", false],
     queryFn: () => getPrompt({ agentId, at, includeMessages: false }),
+    enabled: !knownUnsupported,
     placeholderData: keepPreviousData,
     staleTime: 15_000,
   });
   const messagesQuery = useQuery({
     queryKey: ["turnline-prompt", agentId, at ?? "latest", true],
     queryFn: () => getPrompt({ agentId, at, includeMessages: true }),
-    enabled: messagesRequested,
+    enabled: messagesRequested && !knownUnsupported,
     staleTime: 15_000,
   });
 
@@ -69,7 +75,7 @@ export function TurnPrompt({
   const capturedLabel = prompt?.capturedAt ? formatClock(prompt.capturedAt) : "";
 
   const summary = useMemo(() => {
-    if (!result) return baseQuery.isError ? "Unavailable" : "Loading…";
+    if (!result) return baseQuery.isError ? "Unavailable" : "";
     if (result.status === "ok" && result.prompt) {
       const parts: string[] = [];
       if (result.provider) parts.push(result.provider);
@@ -88,7 +94,8 @@ export function TurnPrompt({
     return showAllTools ? prompt.tools : prompt.tools.slice(0, INITIAL_TOOLS_LIMIT);
   }, [prompt?.tools, showAllTools]);
 
-  if (result?.status === "unsupported") return null;
+  if (knownUnsupported || result?.status === "unsupported") return null;
+  if (!result && !baseQuery.isError) return null;
 
   const toggleMessages = () => {
     const next = !showMessages;
@@ -129,6 +136,7 @@ export function TurnPrompt({
       <HoverPressable
         onPress={() => setOpen((v) => !v)}
         accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
         style={(state) => ({
           flexDirection: "row",
           alignItems: "center",
@@ -303,6 +311,7 @@ export function TurnPrompt({
               <HoverPressable
                 onPress={toggleMessages}
                 accessibilityRole="button"
+                accessibilityState={{ expanded: showMessages }}
                 style={({ hovered, pressed }) => ({
                   alignSelf: "flex-start",
                   flexDirection: "row",
@@ -416,11 +425,13 @@ function PromptSection({
         <HoverPressable
           onPress={() => setOpen((v) => !v)}
           accessibilityRole="button"
+          accessibilityState={{ expanded: open }}
           style={(state) => ({
             flexDirection: "row",
             alignItems: "center",
             gap: 6,
             flex: 1,
+            minWidth: 0,
             paddingHorizontal: 4,
             paddingVertical: 3,
             borderRadius: 5,

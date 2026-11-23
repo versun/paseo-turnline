@@ -69,7 +69,6 @@ export function isDarkSurface(color: string): boolean {
 }
 
 export interface ThingsTokens {
-  dark: boolean;
   hairline: number;
   monoFont: string;
   accentSoft: string;
@@ -101,7 +100,6 @@ export function createThingsTokens(
         : "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
 
   return {
-    dark,
     hairline: StyleSheet.hairlineWidth,
     monoFont,
     accentSoft: withAlpha(c.accent, dark ? 0.16 : 0.1),
