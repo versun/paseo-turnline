@@ -9,6 +9,7 @@ import {
 } from "./providers/antigravity";
 import { readDevinPrompt } from "./providers/devin";
 import { readPiPrompt, resolvePiSessionFile } from "./providers/pi";
+import { resolveAgent } from "./resolve-agent";
 
 type Input = RpcInput<typeof getAgentPrompt>;
 type Output = RpcOutput<typeof getAgentPrompt>;
@@ -106,39 +107,4 @@ export async function getAgentPromptHandler(
       reason: error instanceof Error ? error.message : String(error),
     };
   }
-}
-
-type HandlerPaseoApi = PluginHandlerContext["paseo"];
-type ResolvedAgent = Awaited<
-  ReturnType<HandlerPaseoApi["agents"]["list"]>
->["entries"][number]["agent"];
-
-async function resolveAgent(
-  paseo: HandlerPaseoApi,
-  agentId: string,
-): Promise<ResolvedAgent | null> {
-  try {
-    const result = await paseo.agents.ref(agentId).refresh();
-    if (result?.agent) return result.agent;
-  } catch {
-    // Fall through to a list lookup; refresh may fail on archived agents.
-  }
-  try {
-    let cursor: string | undefined;
-    for (let page = 0; page < 10; page++) {
-      const result = await paseo.agents.list({
-        filter: { includeArchived: true },
-        page: { limit: 200, ...(cursor ? { cursor } : {}) },
-      });
-      const found = result.entries.find((entry) => entry.agent.id === agentId);
-      if (found) return found.agent;
-      if (!result.pageInfo?.hasMore || !result.pageInfo.nextCursor || result.pageInfo.nextCursor === cursor) {
-        break;
-      }
-      cursor = result.pageInfo.nextCursor;
-    }
-  } catch {
-    // ignore
-  }
-  return null;
 }

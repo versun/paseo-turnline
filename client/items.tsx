@@ -15,7 +15,17 @@ import {
   statusTone,
   TruncatedText,
 } from "./things-ui";
-import { formatTimeOnly, formatToolError, plural, type FeedEntry } from "./turn-model";
+import {
+  computeCacheHitRate,
+  formatCacheRate,
+  formatItemUsageDetail,
+  formatTimeOnly,
+  formatTokens,
+  formatToolError,
+  plural,
+  type FeedEntry,
+  type ItemUsageDisplay,
+} from "./turn-model";
 
 type BodyKind = "markdown" | "mono" | "reasoning" | "diff" | "shell" | "todo" | "callout";
 
@@ -611,9 +621,87 @@ function ReasoningWell({
   );
 }
 
+function ItemUsageInline({
+  itemUsage,
+  compact,
+  theme,
+  tokens,
+}: {
+  itemUsage?: ItemUsageDisplay;
+  compact?: boolean;
+  theme: PluginTheme;
+  tokens: ThingsTokens;
+}) {
+  if (!itemUsage) {
+    return (
+      <Text
+        style={{
+          color: withAlpha(theme.colors.foregroundMuted, 0.45),
+          fontSize: 11,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        —
+      </Text>
+    );
+  }
+
+  const { usage, inputOnly } = itemUsage;
+  const tokensText = inputOnly
+    ? `↓${formatTokens(usage.inputTokens)}`
+    : `↓${formatTokens(usage.inputTokens)} ↑${formatTokens(usage.outputTokens)}`;
+  const cacheRate = computeCacheHitRate(usage);
+  const cacheText =
+    cacheRate !== null
+      ? compact
+        ? formatCacheRate(cacheRate)
+        : `${formatCacheRate(cacheRate)} cache`
+      : "—";
+  const highCache = cacheRate !== null && cacheRate >= 0.5;
+
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flexShrink: 0 }}>
+      <Text
+        style={{
+          color: withAlpha(theme.colors.foregroundMuted, 0.88),
+          fontSize: 11,
+          fontVariant: ["tabular-nums"],
+        }}
+        numberOfLines={1}
+      >
+        {tokensText}
+      </Text>
+      <View
+        style={{
+          paddingHorizontal: 5,
+          paddingVertical: 1,
+          borderRadius: 999,
+          backgroundColor: highCache ? tokens.successSoft : tokens.subtlePillBg,
+        }}
+      >
+        <Text
+          style={{
+            color: highCache
+              ? theme.colors.statusSuccess
+              : withAlpha(theme.colors.foregroundMuted, cacheRate !== null && cacheRate > 0 ? 0.92 : 0.72),
+            fontSize: 10.5,
+            fontWeight: highCache ? "600" : "500",
+            fontVariant: ["tabular-nums"],
+          }}
+          numberOfLines={1}
+        >
+          {cacheText}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 export function ItemRow({
   entry,
   description,
+  itemUsage,
+  compact,
   theme,
   tokens,
   expanded,
@@ -621,6 +709,8 @@ export function ItemRow({
 }: {
   entry: FeedEntry;
   description?: ItemDescription;
+  itemUsage?: ItemUsageDisplay;
+  compact?: boolean;
   theme: PluginTheme;
   tokens: ThingsTokens;
   expanded: boolean;
@@ -690,10 +780,12 @@ export function ItemRow({
         />
         <Icon name={d.icon} size={14} color={iconColor} />
         <Text
+          numberOfLines={1}
           style={{
             color: failed ? theme.colors.statusDanger : theme.colors.foreground,
             fontSize: 13,
             fontWeight: entry.item.type === "assistant_message" ? "600" : "500",
+            flexShrink: 1,
           }}
         >
           {d.label}
@@ -726,11 +818,20 @@ export function ItemRow({
           {expanded ? "" : (d.summary ?? "")}
         </Text>
 
+        <ItemUsageInline
+          itemUsage={itemUsage}
+          compact={compact}
+          theme={theme}
+          tokens={tokens}
+        />
+
         <Text
+          numberOfLines={1}
           style={{
             color: withAlpha(theme.colors.foregroundMuted, 0.72),
             fontSize: 11,
             fontVariant: ["tabular-nums"],
+            flexShrink: 0,
           }}
         >
           {formatTimeOnly(entry.timestamp)}
@@ -739,6 +840,17 @@ export function ItemRow({
 
       {expanded && (
         <View style={{ marginLeft: 28, marginRight: 4, marginBottom: 6, gap: 6 }}>
+          {itemUsage && (
+            <Text
+              style={{
+                color: withAlpha(theme.colors.foregroundMuted, 0.85),
+                fontSize: 11,
+                fontVariant: ["tabular-nums"],
+              }}
+            >
+              {formatItemUsageDetail(itemUsage.usage, { inputOnly: itemUsage.inputOnly })}
+            </Text>
+          )}
           {d.errorText && (
             <CalloutBox
               tone="danger"

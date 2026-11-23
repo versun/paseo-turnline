@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { readPiPrompt, resolvePiSessionFile } from "../server/providers/pi";
+import { readPiPrompt, readPiUsage, resolvePiSessionFile } from "../server/providers/pi";
 
 let dir: string;
 
@@ -207,5 +207,118 @@ describe("resolvePiSessionFile", () => {
       await resolvePiSessionFile(undefined, "unknown", "/Users/dev/myproj", dir),
       undefined,
     );
+  });
+});
+
+describe("readPiUsage", () => {
+  it("extracts per-call input/cached/cacheWrite/output tokens, cost, callIds, and prefixes", async () => {
+    const file = join(dir, "usage.jsonl");
+    const lines = [
+      JSON.stringify({
+        type: "message",
+        id: "m1",
+        timestamp: "2026-01-01T10:00:05Z",
+        message: {
+          role: "assistant",
+          responseId: "resp_1",
+          usage: {
+            input: 4000,
+            output: 500,
+            cacheRead: 11000,
+            cacheWrite: 1000,
+            cost: { total: 0.025 },
+          },
+          content: [
+            { type: "thinking", thinking: "Check files first" },
+            { type: "toolCall", id: "toolu_1", name: "read", arguments: { path: "a.ts" } },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "m2",
+        timestamp: "2026-01-01T10:00:08Z",
+        message: {
+          role: "assistant",
+          usage: { input: 0, output: 0, cacheRead: 16000, cacheWrite: 0 },
+          content: [{ type: "text", text: "All done." }],
+        },
+      }),
+    ];
+    await writeFile(file, lines.join("\n"), "utf8");
+
+    const records = await readPiUsage(file);
+    assert.equal(records.length, 2);
+    assert.deepEqual(records[0], {
+      at: "2026-01-01T10:00:05Z",
+      messageId: "resp_1",
+      callIds: ["toolu_1"],
+      textPrefix: undefined,
+      thinkingPrefix: "Check files first",
+      usage: {
+        inputTokens: 16000,
+        cachedInputTokens: 11000,
+        cacheWriteTokens: 1000,
+        outputTokens: 500,
+        costUsd: 0.025,
+      },
+    });
+    assert.deepEqual(records[1], {
+      at: "2026-01-01T10:00:08Z",
+      messageId: "m2",
+      callIds: undefined,
+      textPrefix: "All done.",
+      thinkingPrefix: undefined,
+      usage: {
+        inputTokens: 16000,
+        cachedInputTokens: 16000,
+        cacheWriteTokens: undefined,
+        outputTokens: 0,
+        costUsd: undefined,
+      },
+    });
+  });
+
+  it("ignores JSON null/corrupt lines and falls back to message.timestamp when entry.timestamp is empty or non-string", async () => {
+    const file = join(dir, "usage-edge.jsonl");
+    const ts1 = Date.parse("2026-01-01T11:00:00.000Z");
+    const ts2 = Date.parse("2026-01-01T11:00:05.000Z");
+    const lines = [
+      "null",
+      "{bad json",
+      "123",
+      JSON.stringify({ type: "message", message: { role: "user", content: "hi" } }),
+      JSON.stringify({
+        type: "message",
+        id: "m_empty_ts",
+        timestamp: "",
+        message: {
+          role: "assistant",
+          timestamp: ts1,
+          usage: { input: 500, cacheRead: 1500, output: 100 },
+          content: "Empty entry timestamp",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "m_num_ts",
+        timestamp: 1234567890,
+        message: {
+          role: "assistant",
+          timestamp: ts2,
+          usage: { input: 200, output: 50 },
+          content: [{ type: "text", text: "Numeric entry timestamp" }],
+        },
+      }),
+    ];
+    await writeFile(file, lines.join("\n"), "utf8");
+
+    const records = await readPiUsage(file);
+    assert.equal(records.length, 2);
+    assert.equal(records[0].at, "2026-01-01T11:00:00.000Z");
+    assert.equal(records[0].textPrefix, "Empty entry timestamp");
+    assert.equal(records[1].at, "2026-01-01T11:00:05.000Z");
+    assert.equal(records[1].textPrefix, "Numeric entry timestamp");
+    assert.equal(records[1].usage.cachedInputTokens, undefined);
   });
 });

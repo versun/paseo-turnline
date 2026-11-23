@@ -4,8 +4,18 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { z } from "zod";
 import type { providerPromptSchema } from "../../shared/prompt";
+import type { UsageRecord } from "../../shared/usage";
 
 type ProviderPrompt = z.infer<typeof providerPromptSchema>;
+
+interface PiUsage {
+  input?: unknown;
+  output?: unknown;
+  cacheRead?: unknown;
+  cacheWrite?: unknown;
+  totalTokens?: unknown;
+  cost?: { total?: unknown } | null;
+}
 
 interface PiMessage {
   role?: string;
@@ -16,9 +26,12 @@ interface PiMessage {
   provider?: string;
   model?: string;
   timestamp?: number;
+  responseId?: string;
+  usage?: PiUsage;
 }
 
 interface PiEntry {
+  id?: string;
   type?: string;
   timestamp?: string;
   message?: PiMessage;
@@ -157,6 +170,95 @@ export async function readPiPrompt(options: {
 }
 
 /**
+ * Extract per-LLM-call token usage records from a Pi session JSONL file.
+ * Pi records uncached `input`, `cacheRead`, `cacheWrite`, and `output`
+ * separately, so total input tokens = `input + cacheRead + cacheWrite`.
+ */
+export async function readPiUsage(sessionFile: string): Promise<UsageRecord[]> {
+  const raw = await readFile(sessionFile, "utf8");
+  const records: UsageRecord[] = [];
+
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || (parsed as PiEntry).type !== "message") {
+      continue;
+    }
+    const entry = parsed as PiEntry;
+    const message = entry.message;
+    if (!message || message.role !== "assistant" || !message.usage || typeof message.usage !== "object") {
+      continue;
+    }
+
+    const u = message.usage;
+    const uncached = finiteNonNeg(u.input);
+    const cacheRead = finiteNonNeg(u.cacheRead);
+    const cacheWrite = finiteNonNeg(u.cacheWrite);
+    const output = finiteNonNeg(u.output);
+    if (uncached === undefined && cacheRead === undefined && cacheWrite === undefined && output === undefined) {
+      continue;
+    }
+
+    const inputTokens = (uncached ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+    const outputTokens = output ?? 0;
+    const costUsd = finiteNonNeg(u.cost?.total);
+
+    const callIds: string[] = [];
+    let textPrefix: string | undefined;
+    let thinkingPrefix: string | undefined;
+
+    if (typeof message.content === "string") {
+      textPrefix = normalizePrefix(message.content);
+    } else if (Array.isArray(message.content)) {
+      for (const block of message.content) {
+        if (!block || typeof block !== "object") continue;
+        const b = block as Record<string, unknown>;
+        if ((b.type === "toolCall" || b.type === "tool_call")) {
+          const id = typeof b.id === "string" ? b.id : typeof b.callId === "string" ? b.callId : undefined;
+          if (id) callIds.push(id);
+        } else if (b.type === "text" && !textPrefix && typeof b.text === "string") {
+          textPrefix = normalizePrefix(b.text);
+        } else if (b.type === "thinking" && !thinkingPrefix) {
+          const t = typeof b.thinking === "string" ? b.thinking : typeof b.text === "string" ? b.text : undefined;
+          if (t) thinkingPrefix = normalizePrefix(t);
+        }
+      }
+    }
+
+    const messageId =
+      typeof message.responseId === "string" && message.responseId
+        ? message.responseId
+        : typeof entry.id === "string" && entry.id
+          ? entry.id
+          : undefined;
+
+    records.push({
+      at:
+        (typeof entry.timestamp === "string" && entry.timestamp ? entry.timestamp : undefined) ??
+        isoOf(message.timestamp),
+      messageId,
+      callIds: callIds.length > 0 ? callIds : undefined,
+      textPrefix,
+      thinkingPrefix,
+      usage: {
+        inputTokens,
+        cachedInputTokens: cacheRead ?? ("cacheRead" in u ? 0 : undefined),
+        cacheWriteTokens: cacheWrite && cacheWrite > 0 ? cacheWrite : undefined,
+        outputTokens,
+        costUsd,
+      },
+    });
+  }
+
+  return records;
+}
+
+/**
  * The agent record's nativeHandle is normally the session file path. When it
  * only carries the session id (or points to a moved path), locate the file
  * under pi's session directory for the agent's cwd (`--<path with separators as ->--`)
@@ -194,6 +296,15 @@ function isoOf(ms: number | undefined): string | undefined {
   if (typeof ms !== "number" || !Number.isFinite(ms)) return undefined;
   const d = new Date(ms);
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+}
+
+function finiteNonNeg(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function normalizePrefix(text: string): string | undefined {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  return cleaned ? cleaned.slice(0, 160) : undefined;
 }
 
 function serializeContent(content: unknown): string {

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { execCommand } from "@getpaseo/plugin/server";
 import type { z } from "zod";
 import type { providerPromptSchema } from "../../shared/prompt";
+import type { UsageRecord } from "../../shared/usage";
 
 type ProviderPrompt = z.infer<typeof providerPromptSchema>;
 
@@ -117,6 +118,116 @@ export async function readDevinPrompt(options: {
   };
 }
 
+/**
+ * Extract per-LLM-call token usage records for a Devin CLI session.
+ * Assistant messages may appear on duplicate nodes with the same `message_id`;
+ * we deduplicate by `message_id` (preserving chronological order and preferring
+ * the latest metrics snapshot).
+ */
+export async function readDevinUsage(options: {
+  sessionId: string;
+  dbPath?: string;
+}): Promise<UsageRecord[]> {
+  const { sessionId } = options;
+  const dbPath = options.dbPath ?? devinDbPath();
+  if (!existsSync(dbPath)) {
+    throw new Error(`devin sessions.db not found at ${dbPath}`);
+  }
+
+  const id = sqlString(sessionId);
+  const [session] = await sqliteJson<DevinSessionRow>(
+    dbPath,
+    `SELECT id, model FROM sessions WHERE id=${id}`,
+  );
+  if (!session) {
+    throw new Error(`no devin session ${sessionId} in sessions.db`);
+  }
+
+  const rows = await sqliteJson<DevinNodeRow>(
+    dbPath,
+    `SELECT node_id, created_at, chat_message
+     FROM message_nodes
+     WHERE session_id=${id}
+     ORDER BY node_id`,
+  );
+
+  const records: UsageRecord[] = [];
+  const indexByMessageId = new Map<string, number>();
+
+  for (const row of rows) {
+    const parsed = parseDevinMessage(row.chat_message);
+    if (!parsed || parsed.role !== "assistant") continue;
+    const meta = isRecord(parsed.metadata) ? parsed.metadata : undefined;
+    const metrics = meta && isRecord(meta.metrics) ? meta.metrics : undefined;
+    if (!metrics) continue;
+
+    const uncached = finiteNonNeg(metrics.input_tokens);
+    const cacheRead = finiteNonNeg(metrics.cache_read_tokens);
+    const cacheWrite = finiteNonNeg(metrics.cache_creation_tokens);
+    const contextInput = finiteNonNeg(metrics.context_input_tokens);
+    const output = finiteNonNeg(metrics.output_tokens) ?? finiteNonNeg(meta?.num_tokens);
+
+    if (
+      uncached === undefined &&
+      cacheRead === undefined &&
+      cacheWrite === undefined &&
+      contextInput === undefined &&
+      output === undefined
+    ) {
+      continue;
+    }
+
+    const inputTokens = contextInput ?? (uncached ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+    const outputTokens = output ?? 0;
+    const hasCacheField = "cache_read_tokens" in metrics;
+
+    const callIds: string[] = [];
+    if (Array.isArray(parsed.tool_calls)) {
+      for (const tc of parsed.tool_calls) {
+        if (isRecord(tc) && typeof tc.id === "string" && tc.id) {
+          callIds.push(tc.id);
+        }
+      }
+    }
+
+    const textPrefix = extractDevinTextPrefix(parsed.content);
+    const thinkingPrefix = extractDevinThinkingPrefix(parsed.thinking);
+    const messageId =
+      typeof parsed.message_id === "string" && parsed.message_id ? parsed.message_id : undefined;
+
+    const at =
+      parseIsoString(meta?.created_at) ??
+      parseIsoString(meta?.started_generation_at) ??
+      secToIso(row.created_at);
+
+    const record: UsageRecord = {
+      at,
+      messageId,
+      callIds: callIds.length > 0 ? callIds : undefined,
+      textPrefix,
+      thinkingPrefix,
+      usage: {
+        inputTokens,
+        cachedInputTokens: cacheRead ?? (hasCacheField ? 0 : undefined),
+        cacheWriteTokens: cacheWrite && cacheWrite > 0 ? cacheWrite : undefined,
+        outputTokens,
+      },
+    };
+
+    if (messageId !== undefined) {
+      const existingIdx = indexByMessageId.get(messageId);
+      if (existingIdx !== undefined) {
+        records[existingIdx] = record;
+        continue;
+      }
+      indexByMessageId.set(messageId, records.length);
+    }
+    records.push(record);
+  }
+
+  return records;
+}
+
 export function devinDbPath(): string {
   const dataHome = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
   return join(dataHome, "devin", "cli", "sessions.db");
@@ -149,15 +260,70 @@ function secToIso(sec: number | null): string | undefined {
 }
 
 function parseMessage(raw: string): { role?: unknown; content?: unknown } | undefined {
+  return parseDevinMessage(raw);
+}
+
+function parseDevinMessage(raw: string): Record<string, unknown> | undefined {
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as { role?: unknown; content?: unknown };
-    }
+    if (isRecord(parsed)) return parsed;
     return undefined;
   } catch {
     return undefined;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function finiteNonNeg(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function parseIsoString(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
+}
+
+function normalizePrefix(text: string): string | undefined {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  return cleaned ? cleaned.slice(0, 160) : undefined;
+}
+
+function extractDevinTextPrefix(content: unknown): string | undefined {
+  if (typeof content === "string") return normalizePrefix(content);
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (!isRecord(block)) continue;
+      if (block.type === "text" && typeof block.text === "string") {
+        const prefix = normalizePrefix(block.text);
+        if (prefix) return prefix;
+      }
+    }
+  }
+  return undefined;
+}
+
+function extractDevinThinkingPrefix(thinking: unknown): string | undefined {
+  if (typeof thinking === "string") return normalizePrefix(thinking);
+  if (isRecord(thinking)) {
+    const raw =
+      typeof thinking.thinking === "string"
+        ? thinking.thinking
+        : typeof thinking.text === "string"
+          ? thinking.text
+          : undefined;
+    return raw ? normalizePrefix(raw) : undefined;
+  }
+  if (Array.isArray(thinking)) {
+    for (const part of thinking) {
+      const prefix = extractDevinThinkingPrefix(part);
+      if (prefix) return prefix;
+    }
+  }
+  return undefined;
 }
 
 function contentText(content: unknown): string {

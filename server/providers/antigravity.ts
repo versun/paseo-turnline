@@ -5,6 +5,7 @@ import { join, relative, resolve } from "node:path";
 import { execCommand } from "@getpaseo/plugin/server";
 import type { z } from "zod";
 import type { providerPromptSchema } from "../../shared/prompt";
+import type { UsageRecord } from "../../shared/usage";
 
 type ProviderPrompt = z.infer<typeof providerPromptSchema>;
 
@@ -246,15 +247,16 @@ interface ParsedSnapshot {
 }
 
 const snapshotCache = new Map<string, ParsedSnapshot>();
+const usageCache = new Map<string, { fingerprint: string; records: UsageRecord[] }>();
 
-function cacheSet(key: string, value: ParsedSnapshot): void {
-  if (snapshotCache.has(key)) {
-    snapshotCache.delete(key);
-  } else if (snapshotCache.size >= MAX_CACHE_ENTRIES) {
-    const oldest = snapshotCache.keys().next().value;
-    if (oldest !== undefined) snapshotCache.delete(oldest);
+function lruCacheSet<T>(cache: Map<string, T>, key: string, value: T): void {
+  if (cache.has(key)) {
+    cache.delete(key);
+  } else if (cache.size >= MAX_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
   }
-  snapshotCache.set(key, value);
+  cache.set(key, value);
 }
 
 async function readDbFingerprintAndMtime(dbPath: string): Promise<{
@@ -302,7 +304,7 @@ export async function readAntigravityPrompt(options: {
   const { fingerprint, mtimeMs } = await readDbFingerprintAndMtime(dbPath);
   let snapshot = snapshotCache.get(dbPath);
   if (snapshot && snapshot.fingerprint === fingerprint) {
-    cacheSet(dbPath, snapshot);
+    lruCacheSet(snapshotCache, dbPath, snapshot);
   } else {
     const blob = await readLargestGenMetadata(dbPath);
     const body = blob ? requestBody(blob) : undefined;
@@ -363,7 +365,7 @@ export async function readAntigravityPrompt(options: {
       messages,
       messageCount,
     };
-    cacheSet(dbPath, snapshot);
+    lruCacheSet(snapshotCache, dbPath, snapshot);
   }
 
   return {
@@ -377,6 +379,148 @@ export async function readAntigravityPrompt(options: {
     messageCount: snapshot.messageCount,
     source: { kind: "antigravity-db", path: dbPath },
   };
+}
+
+function toSafeNonNegInt(value: bigint | undefined): number | undefined {
+  if (value === undefined || value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return undefined;
+  }
+  return Number(value);
+}
+
+function normalizePrefix(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  return cleaned ? cleaned.slice(0, 160) : undefined;
+}
+
+function decodeProtoTimestamp(bytes: Uint8Array | undefined): string | undefined {
+  if (!bytes) return undefined;
+  let seconds: number | undefined;
+  let nanos = 0;
+  for (const f of parseFields(bytes)) {
+    if (f.field === 1 && f.wire === 0) seconds = toSafeNonNegInt(f.num);
+    else if (f.field === 2 && f.wire === 0) nanos = toSafeNonNegInt(f.num) ?? 0;
+  }
+  if (seconds === undefined) return undefined;
+  const ms = seconds * 1000 + Math.floor(nanos / 1_000_000);
+  const d = new Date(ms);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+}
+
+function decodeAntigravityUsageStep(
+  metaBuf: Buffer | undefined,
+  payloadBuf: Buffer | undefined,
+): UsageRecord | undefined {
+  const payloadFields = payloadBuf ? parseFields(payloadBuf) : [];
+  let effectiveMeta = metaBuf ? parseFields(metaBuf) : [];
+  if (effectiveMeta.length === 0) {
+    const embeddedMeta = payloadFields.find((f) => f.field === 5 && f.wire === 2)?.bytes;
+    if (embeddedMeta) effectiveMeta = parseFields(embeddedMeta);
+  }
+
+  let at: string | undefined;
+  let usageFieldBytes: Uint8Array | undefined;
+  for (const f of effectiveMeta) {
+    if (f.field === 1 && f.wire === 2 && !at) {
+      at = decodeProtoTimestamp(f.bytes);
+    } else if (f.field === 9 && f.wire === 2 && !usageFieldBytes) {
+      usageFieldBytes = f.bytes;
+    }
+  }
+  if (!usageFieldBytes) return undefined;
+
+  let uncachedInput: number | undefined;
+  let outputTokens: number | undefined;
+  let cachedInput: number | undefined;
+  for (const uf of parseFields(usageFieldBytes)) {
+    if (uf.wire !== 0) continue;
+    if (uf.field === 2) uncachedInput = toSafeNonNegInt(uf.num);
+    else if (uf.field === 3) outputTokens = toSafeNonNegInt(uf.num);
+    else if (uf.field === 5) cachedInput = toSafeNonNegInt(uf.num);
+  }
+  if (uncachedInput === undefined && outputTokens === undefined && cachedInput === undefined) {
+    return undefined;
+  }
+
+  const inputTokens = (uncachedInput ?? 0) + (cachedInput ?? 0);
+  const cachedInputTokens = cachedInput ?? 0;
+
+  let messageId: string | undefined;
+  let textPrefix: string | undefined;
+  let thinkingPrefix: string | undefined;
+  const callIds: string[] = [];
+
+  const plannerBytes = payloadFields.find((f) => f.field === 20 && f.wire === 2)?.bytes;
+  if (plannerBytes) {
+    for (const pf of parseFields(plannerBytes)) {
+      if (pf.wire !== 2) continue;
+      if ((pf.field === 1 || pf.field === 8) && !textPrefix) {
+        textPrefix = normalizePrefix(text(pf.bytes));
+      } else if (pf.field === 3 && !thinkingPrefix) {
+        thinkingPrefix = normalizePrefix(text(pf.bytes));
+      } else if (pf.field === 6 && !messageId) {
+        messageId = text(pf.bytes);
+      } else if (pf.field === 7 && pf.bytes) {
+        for (const cf of parseFields(pf.bytes)) {
+          if (cf.field === 1 && cf.wire === 2) {
+            const callId = text(cf.bytes);
+            if (callId) callIds.push(callId);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    at,
+    messageId,
+    callIds: callIds.length > 0 ? callIds : undefined,
+    textPrefix,
+    thinkingPrefix,
+    usage: {
+      inputTokens,
+      cachedInputTokens,
+      outputTokens: outputTokens ?? 0,
+    },
+  };
+}
+
+/**
+ * Extract per-LLM-generation token usage records from an Antigravity
+ * conversation database's `steps` table (`step_type = 15`, planner responses).
+ */
+export async function readAntigravityUsage(dbPath: string): Promise<UsageRecord[]> {
+  if (!existsSync(dbPath)) {
+    throw new Error(`antigravity conversation db not found at ${dbPath}`);
+  }
+  const { fingerprint } = await readDbFingerprintAndMtime(dbPath);
+  const cached = usageCache.get(dbPath);
+  if (cached && cached.fingerprint === fingerprint) {
+    lruCacheSet(usageCache, dbPath, cached);
+    return cached.records.map((record) => ({
+      ...record,
+      callIds: record.callIds ? [...record.callIds] : undefined,
+      usage: { ...record.usage },
+    }));
+  }
+
+  const rows = await readPlannerSteps(dbPath);
+  const records: UsageRecord[] = [];
+  for (const row of rows) {
+    const metaBuf = row.meta_hex ? Buffer.from(row.meta_hex, "hex") : undefined;
+    const payloadBuf = row.payload_hex ? Buffer.from(row.payload_hex, "hex") : undefined;
+    const decoded = decodeAntigravityUsageStep(metaBuf, payloadBuf);
+    if (decoded) records.push(decoded);
+  }
+
+  lruCacheSet(usageCache, dbPath, { fingerprint, records });
+  return records.map((record) => ({
+    ...record,
+    callIds: record.callIds ? [...record.callIds] : undefined,
+    usage: { ...record.usage },
+  }));
 }
 
 function sanitizeConversationId(value: unknown): string | undefined {
@@ -448,7 +592,7 @@ export function antigravityConversationDbPath(
  * -shm so SQLite reconstructs a consistent WAL index from -wal) and query
  * the snapshot normally.
  */
-async function readLargestGenMetadata(dbPath: string): Promise<Buffer | undefined> {
+async function withAntigravityDbCopy<T>(dbPath: string, query: (copyPath: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "turnline-agy-"));
   try {
     const copy = join(dir, "conversation.db");
@@ -458,6 +602,14 @@ async function readLargestGenMetadata(dbPath: string): Promise<Buffer | undefine
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
     }
+    return await query(copy);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function readLargestGenMetadata(dbPath: string): Promise<Buffer | undefined> {
+  return withAntigravityDbCopy(dbPath, async (copy) => {
     const { stdout } = await execCommand(
       "sqlite3",
       ["-json", copy, `SELECT hex(data) AS hex FROM gen_metadata ORDER BY length(data) DESC LIMIT 1`],
@@ -466,7 +618,31 @@ async function readLargestGenMetadata(dbPath: string): Promise<Buffer | undefine
     const rows = JSON.parse(stdout.trim() || "[]") as { hex?: string }[];
     const hex = rows[0]?.hex;
     return hex ? Buffer.from(hex, "hex") : undefined;
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+  });
+}
+
+async function readPlannerSteps(
+  dbPath: string,
+): Promise<{ meta_hex?: string | null; payload_hex?: string | null }[]> {
+  return withAntigravityDbCopy(dbPath, async (copy) => {
+    try {
+      const { stdout } = await execCommand(
+        "sqlite3",
+        [
+          "-json",
+          copy,
+          `SELECT hex(metadata) AS meta_hex, hex(step_payload) AS payload_hex FROM steps WHERE step_type = 15 ORDER BY idx`,
+        ],
+        { timeout: 30_000, maxBuffer: 96 * 1024 * 1024 },
+      );
+      return JSON.parse(stdout.trim() || "[]") as {
+        meta_hex?: string | null;
+        payload_hex?: string | null;
+      }[];
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (/no such table:\s*steps/i.test(msg)) return [];
+      throw error;
+    }
+  });
 }

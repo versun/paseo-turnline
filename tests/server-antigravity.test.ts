@@ -7,6 +7,7 @@ import { after, before, describe, it } from "node:test";
 import {
   antigravityConversationDbPath,
   readAntigravityPrompt,
+  readAntigravityUsage,
   resolveAntigravityConversationId,
 } from "../server/providers/antigravity";
 
@@ -352,5 +353,140 @@ describe("resolveAntigravityConversationId", () => {
     assert.throws(() => antigravityConversationDbPath("../escape", "/root"), /invalid/);
     assert.throws(() => antigravityConversationDbPath("a/b", "/root"), /invalid/);
     assert.throws(() => antigravityConversationDbPath("", "/root"), /invalid/);
+  });
+});
+
+describe("readAntigravityUsage", () => {
+  it("decodes planner step usage, cache read, callIds, thinking, and reply text from steps table", async () => {
+    const stepsDb = join(dir, "steps-usage.db");
+    const ts1 = message([fieldVar(1, 1704103200), fieldVar(2, 500_000_000)]);
+    const usage1 = message([fieldVar(2, 3000), fieldVar(3, 250), fieldVar(5, 9000)]);
+    const meta1 = message([fieldLen(1, ts1), fieldLen(9, usage1)]);
+    const payload1 = message([
+      fieldVar(1, 15),
+      fieldLen(
+        20,
+        message([
+          fieldLen(3, "Checking files first"),
+          fieldLen(6, "bot-step-1"),
+          fieldLen(7, message([fieldLen(1, "call_agy_1"), fieldLen(2, "read_file")])),
+        ]),
+      ),
+    ]);
+
+    const ts2 = message([fieldVar(1, 1704103210)]);
+    const usage2 = message([fieldVar(2, 12000), fieldVar(3, 400)]);
+    const meta2 = message([fieldLen(1, ts2), fieldLen(9, usage2)]);
+    const payload2 = message([
+      fieldVar(1, 15),
+      fieldLen(5, meta2),
+      fieldLen(
+        20,
+        message([
+          fieldLen(1, "Everything is fixed."),
+          fieldLen(6, "bot-step-2"),
+        ]),
+      ),
+    ]);
+
+    execFileSync("sqlite3", [
+      stepsDb,
+      `CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB, step_payload BLOB);
+       INSERT INTO steps VALUES (0, 14, NULL, NULL);
+       INSERT INTO steps VALUES (1, 15, x'${meta1.toString("hex")}', x'${payload1.toString("hex")}');
+       INSERT INTO steps VALUES (2, 15, NULL, x'${payload2.toString("hex")}');`,
+    ]);
+
+    const records = await readAntigravityUsage(stepsDb);
+    assert.equal(records.length, 2);
+    assert.deepEqual(records[0], {
+      at: new Date(1704103200 * 1000 + 500).toISOString(),
+      messageId: "bot-step-1",
+      callIds: ["call_agy_1"],
+      textPrefix: undefined,
+      thinkingPrefix: "Checking files first",
+      usage: {
+        inputTokens: 12000,
+        cachedInputTokens: 9000,
+        outputTokens: 250,
+      },
+    });
+    assert.deepEqual(records[1], {
+      at: new Date(1704103210 * 1000).toISOString(),
+      messageId: "bot-step-2",
+      callIds: undefined,
+      textPrefix: "Everything is fixed.",
+      thinkingPrefix: undefined,
+      usage: {
+        inputTokens: 12000,
+        cachedInputTokens: 0,
+        outputTokens: 400,
+      },
+    });
+  });
+
+  it("returns empty array when steps table does not exist", async () => {
+    const records = await readAntigravityUsage(dbPath);
+    assert.deepEqual(records, []);
+  });
+
+  it("reads uncheckpointed WAL writes, invalidates usageCache on updates, skips corrupt/empty steps, and rejects missing db", async () => {
+    const walUsageDb = join(dir, "wal-usage.db");
+    const ts1 = message([fieldVar(1, 1704104000)]);
+    const usage1 = message([fieldVar(2, 1000), fieldVar(3, 100), fieldVar(5, 4000)]);
+    const meta1 = message([fieldLen(1, ts1), fieldLen(9, usage1)]);
+    const payload1 = message([
+      fieldVar(1, 15),
+      fieldLen(20, message([fieldLen(1, "Step one"), fieldLen(6, "bot-wal-1")])),
+    ]);
+
+    execFileSync("sqlite3", [
+      walUsageDb,
+      `PRAGMA journal_mode=WAL;
+       CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB, step_payload BLOB);`,
+    ]);
+    execFileSync("sqlite3", [
+      walUsageDb,
+      `PRAGMA wal_autocheckpoint=0;
+       INSERT INTO steps VALUES (1, 15, NULL, NULL);
+       INSERT INTO steps VALUES (2, 15, x'ffffffffff', x'ffffffffff');
+       INSERT INTO steps VALUES (3, 15, x'${meta1.toString("hex")}', x'${payload1.toString("hex")}');`,
+    ]);
+
+    const first = await readAntigravityUsage(walUsageDb);
+    assert.equal(first.length, 1);
+    assert.equal(first[0].messageId, "bot-wal-1");
+    assert.equal(first[0].usage.inputTokens, 5000);
+    assert.equal(first[0].usage.cachedInputTokens, 4000);
+
+    // Mutate returned record to confirm cached objects are defensively cloned
+    first[0].usage.inputTokens = 999999;
+    const cachedRead = await readAntigravityUsage(walUsageDb);
+    assert.equal(cachedRead[0].usage.inputTokens, 5000);
+
+    // Append another step in WAL mode without checkpointing -> invalidates usageCache
+    const ts2 = message([fieldVar(1, 1704104010)]);
+    const usage2 = message([fieldVar(2, 2000), fieldVar(3, 250), fieldVar(5, 6000)]);
+    const meta2 = message([fieldLen(1, ts2), fieldLen(9, usage2)]);
+    const payload2 = message([
+      fieldVar(1, 15),
+      fieldLen(20, message([fieldLen(1, "Step two"), fieldLen(6, "bot-wal-2")])),
+    ]);
+    execFileSync("sqlite3", [
+      walUsageDb,
+      `PRAGMA wal_autocheckpoint=0;
+       INSERT INTO steps VALUES (4, 15, x'${meta2.toString("hex")}', x'${payload2.toString("hex")}');`,
+    ]);
+
+    const updated = await readAntigravityUsage(walUsageDb);
+    assert.equal(updated.length, 2);
+    assert.equal(updated[1].messageId, "bot-wal-2");
+    assert.equal(updated[1].usage.inputTokens, 8000);
+    assert.equal(updated[1].usage.cachedInputTokens, 6000);
+
+    await assert.rejects(
+      () => readAntigravityUsage(join(dir, "missing-usage.db")),
+      /not found/,
+    );
   });
 });

@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Text, View } from "react-native";
-import type { PluginTheme } from "@getpaseo/plugin";
-import { usePaseo, useTabState, type PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
+import type { PluginTheme, RpcOutput } from "@getpaseo/plugin";
+import { usePaseo, useRpc, useTabState, type PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { FlatList, Icon, Loading, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
 import { z } from "zod";
+import { getAgentUsage, type UsageRecord } from "../shared/usage";
 import { useTurnFeeds } from "./feed";
 import { describeEntry, ItemRow } from "./items";
 import { TurnPrompt } from "./prompt";
@@ -21,9 +23,12 @@ import {
   TinyProgressBar,
 } from "./things-ui";
 import {
+  assignUsageToTurns,
   buildTurnSummaryText,
+  computeCacheHitRate,
   computeTurnCounts,
   filterTurns,
+  formatCacheRate,
   formatClock,
   formatCost,
   formatDuration,
@@ -35,6 +40,7 @@ import {
   stepKeyForEntry,
   summarizeTurn,
   turnDurationMs,
+  type ItemUsageDisplay,
   type StatusFilter,
   type Turn,
   type TurnStatus,
@@ -173,6 +179,7 @@ const STATUS_LABEL: Record<TurnStatus, string> = {
  */
 function TurnRowCard({
   turn,
+  itemUsages,
   agentTitle,
   showCollapsedAgentTag,
   theme,
@@ -183,6 +190,7 @@ function TurnRowCard({
   onOpenAgent,
 }: {
   turn: Turn;
+  itemUsages?: ReadonlyMap<number, ItemUsageDisplay>;
   agentTitle?: string;
   showCollapsedAgentTag: boolean;
   theme: PluginTheme;
@@ -194,6 +202,7 @@ function TurnRowCard({
 }) {
   const duration = turnDurationMs(turn);
   const usage = turn.usage;
+  const cacheRate = computeCacheHitRate(usage);
   const summary = useMemo(() => summarizeTurn(turn, STATUS_LABEL[turn.status]), [turn]);
   const costText = formatCost(usage?.totalCostUsd);
 
@@ -201,6 +210,7 @@ function TurnRowCard({
     return (
       <ExpandedTurnCard
         turn={turn}
+        itemUsages={itemUsages}
         agentTitle={agentTitle}
         summary={summary}
         duration={duration}
@@ -366,6 +376,7 @@ function TurnRowCard({
                 }}
               >
                 ↓{formatTokens(usage.inputTokens)} ↑{formatTokens(usage.outputTokens)}
+                {cacheRate !== null ? ` · ${formatCacheRate(cacheRate)} cache` : ""}
               </Text>
             )}
 
@@ -393,6 +404,7 @@ function TurnRowCard({
  */
 function ExpandedTurnCard({
   turn,
+  itemUsages,
   agentTitle,
   summary,
   duration,
@@ -404,6 +416,7 @@ function ExpandedTurnCard({
   onOpenAgent,
 }: {
   turn: Turn;
+  itemUsages?: ReadonlyMap<number, ItemUsageDisplay>;
   agentTitle?: string;
   summary: TurnSummary;
   duration: number | null;
@@ -415,6 +428,7 @@ function ExpandedTurnCard({
   onOpenAgent?: () => void;
 }) {
   const usage = turn.usage;
+  const cacheRate = computeCacheHitRate(usage);
   const sColor = statusTone(turn.status, theme, tokens);
 
   const stepMeta = useMemo(() => {
@@ -425,7 +439,7 @@ function ExpandedTurnCard({
       seen.set(base, count + 1);
       const key = count === 0 ? base : `${base}#${count}`;
       const description = describeEntry(entry);
-      return { key, entry, description, expandable: description.expandable };
+      return { idx, key, entry, description, expandable: description.expandable };
     });
   }, [turn.items]);
 
@@ -617,10 +631,12 @@ function ExpandedTurnCard({
             }}
           >
             ↓{formatTokens(usage.inputTokens)}
-            {typeof usage.cachedInputTokens === "number" &&
-            Number.isFinite(usage.cachedInputTokens) &&
-            usage.cachedInputTokens > 0
-              ? ` (${formatTokens(usage.cachedInputTokens)} cached)`
+            {cacheRate !== null
+              ? typeof usage.cachedInputTokens === "number" &&
+                Number.isFinite(usage.cachedInputTokens) &&
+                usage.cachedInputTokens > 0
+                ? ` (${formatTokens(usage.cachedInputTokens)} · ${formatCacheRate(cacheRate)} cache)`
+                : ` (${formatCacheRate(cacheRate)} cache)`
               : ""}{" "}
             ↑{formatTokens(usage.outputTokens)}
           </Text>
@@ -665,11 +681,13 @@ function ExpandedTurnCard({
           theme={theme}
           tokens={tokens}
         />
-        {stepMeta.map(({ key, entry, description }) => (
+        {stepMeta.map(({ idx, key, entry, description }) => (
           <ItemRow
             key={key}
             entry={entry}
             description={description}
+            itemUsage={itemUsages?.get(idx)}
+            compact={compact}
             theme={theme}
             tokens={tokens}
             expanded={openSteps.has(key)}
@@ -769,6 +787,8 @@ export function TurnsPanel({
   navigation,
 }: PluginWorkspacePanelProps) {
   const paseo = usePaseo();
+  const getUsage = useRpc(getAgentUsage);
+  const queryClient = useQueryClient();
   const [state, setState] = useTabState(tab, tabStateSchema, { sort: "newest" });
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => new Set());
   const [searchOpen, setSearchOpen] = useState(false);
@@ -795,6 +815,80 @@ export function TurnsPanel({
 
   const { feeds, loadOlder } = useTurnFeeds(paseo, agents);
 
+  const visibleAgents = useMemo(() => {
+    if (selectedAgentId === "all") return agents;
+    return agents.filter((a) => a.id === selectedAgentId);
+  }, [agents, selectedAgentId]);
+
+  const usageQueries = useQueries({
+    queries: visibleAgents.map((agent) => ({
+      queryKey: ["turnline-usage", agent.id] as const,
+      queryFn: () => getUsage({ agentId: agent.id }),
+      staleTime: agent.running ? 2_000 : 15_000,
+      refetchInterval: agent.running
+        ? (query: { state: { data?: RpcOutput<typeof getAgentUsage> } }) =>
+            query.state.data?.status === "unsupported" ? false : 4_000
+        : (false as const),
+    })),
+  });
+
+  const activityByAgent = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const agent of agents) {
+      const view = feeds.get(agent.id);
+      if (!view || view.loading) continue;
+      let itemCount = 0;
+      let completedCount = 0;
+      for (const t of view.turns) {
+        itemCount += t.items.length;
+        if (t.status !== "running") completedCount += 1;
+      }
+      map.set(agent.id, `${view.turns.length}:${itemCount}:${completedCount}:${agent.running ? 1 : 0}`);
+    }
+    return map;
+  }, [agents, feeds]);
+
+  const prevActivityRef = useRef<Map<string, string>>(new Map());
+  useEffect(() => {
+    const prev = prevActivityRef.current;
+    for (const [agentId, sig] of activityByAgent) {
+      const prevSig = prev.get(agentId);
+      if (prevSig !== undefined && prevSig !== sig) {
+        const cached = queryClient.getQueryData<RpcOutput<typeof getAgentUsage>>([
+          "turnline-usage",
+          agentId,
+        ]);
+        if (cached?.status === "unsupported") continue;
+        void queryClient.invalidateQueries({ queryKey: ["turnline-usage", agentId] });
+      }
+    }
+    prevActivityRef.current = new Map(activityByAgent);
+  }, [activityByAgent, queryClient]);
+
+  const usageRecordsRef = useRef<Map<string, readonly UsageRecord[]>>(new Map());
+  const usageRecordsByAgent = useMemo(() => {
+    const next = new Map<string, readonly UsageRecord[]>();
+    visibleAgents.forEach((agent, index) => {
+      const data = usageQueries[index]?.data;
+      if (data?.status === "ok" && data.records) {
+        next.set(agent.id, data.records);
+      }
+    });
+    const prev = usageRecordsRef.current;
+    if (prev.size === next.size) {
+      let same = true;
+      for (const [k, v] of next) {
+        if (prev.get(k) !== v) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return prev;
+    }
+    usageRecordsRef.current = next;
+    return next;
+  }, [visibleAgents, usageQueries]);
+
   const visibleFeeds = useMemo(() => {
     if (selectedAgentId === "all") return [...feeds.values()];
     const view = feeds.get(selectedAgentId);
@@ -803,11 +897,27 @@ export function TurnsPanel({
 
   const titleById = useMemo(() => new Map(agents.map((a) => [a.id, a.title])), [agents]);
 
-  const allTurns = useMemo(() => {
+  const { allTurns, itemUsagesByTurnKey } = useMemo(() => {
     const combined: Turn[] = [];
-    for (const view of visibleFeeds) combined.push(...view.turns);
-    return sortTurns(combined, state.sort);
-  }, [visibleFeeds, state.sort]);
+    const usagesByKey = new Map<string, Map<number, ItemUsageDisplay>>();
+    for (const view of visibleFeeds) {
+      const records = usageRecordsByAgent.get(view.agentId);
+      const resolved = assignUsageToTurns(view.turns, records);
+      for (const turn of view.turns) {
+        const entry = resolved.get(turn.key);
+        if (entry) {
+          usagesByKey.set(turn.key, entry.itemUsages);
+          combined.push(entry.turnUsage !== turn.usage ? { ...turn, usage: entry.turnUsage } : turn);
+        } else {
+          combined.push(turn);
+        }
+      }
+    }
+    return {
+      allTurns: sortTurns(combined, state.sort),
+      itemUsagesByTurnKey: usagesByKey,
+    };
+  }, [visibleFeeds, usageRecordsByAgent, state.sort]);
 
   const counts = useMemo(() => computeTurnCounts(allTurns), [allTurns]);
 
@@ -880,6 +990,9 @@ export function TurnsPanel({
     if (counts.running > 0) parts.push(`${counts.running} running`);
     if (counts.failed > 0) parts.push(`${counts.failed} failed`);
     if (counts.tokensTotal !== undefined) parts.push(`${formatTokens(counts.tokensTotal)} tokens`);
+    if (counts.cacheHitRate !== undefined) {
+      parts.push(`${formatCacheRate(counts.cacheHitRate)} cache`);
+    }
     if (counts.costTotal !== undefined) {
       const formatted = formatCost(counts.costTotal);
       if (formatted) parts.push(formatted);
@@ -1300,6 +1413,7 @@ export function TurnsPanel({
               return (
                 <TurnRowCard
                   turn={turn}
+                  itemUsages={itemUsagesByTurnKey.get(turn.key)}
                   agentTitle={titleById.get(turn.agentId)}
                   showCollapsedAgentTag={selectedAgentId === "all" && agents.length > 1}
                   theme={theme}

@@ -9,7 +9,9 @@ import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin
 import contributeClient from "../index.client";
 import contributeServer from "../index.server";
 import { getAgentPromptHandler } from "../server/prompt";
+import { getAgentUsageHandler } from "../server/usage";
 import { getAgentPrompt } from "../shared/prompt";
+import { getAgentUsage } from "../shared/usage";
 
 let dir: string;
 
@@ -234,8 +236,282 @@ describe("getAgentPromptHandler", () => {
   });
 });
 
+describe("getAgentUsageHandler", () => {
+  it("returns unavailable when agent cannot be resolved and unsupported for unknown providers", async () => {
+    const missing = await getAgentUsageHandler({ agentId: "nope" }, mockHandlerContext({}));
+    assert.equal(missing.status, "unavailable");
+    assert.ok(getAgentUsage.output.safeParse(missing).success);
+
+    const unsupported = await getAgentUsageHandler(
+      { agentId: "codex-1" },
+      mockHandlerContext({ refreshed: { id: "codex-1", provider: "codex", cwd: dir } }),
+    );
+    assert.equal(unsupported.status, "unsupported");
+    assert.ok(getAgentUsage.output.safeParse(unsupported).success);
+  });
+
+  it("reads pi and claude session usage records and validates against output schema", async () => {
+    const piFile = join(dir, "pi-usage.jsonl");
+    await writeFile(
+      piFile,
+      JSON.stringify({
+        type: "message",
+        id: "m1",
+        timestamp: "2026-01-01T10:00:00Z",
+        message: {
+          role: "assistant",
+          usage: { input: 2000, cacheRead: 8000, cacheWrite: 0, output: 150, cost: { total: 0.01 } },
+          content: [{ type: "text", text: "Hi" }],
+        },
+      }),
+      "utf8",
+    );
+
+    const piRes = await getAgentUsageHandler(
+      { agentId: "pi-1" },
+      mockHandlerContext({
+        refreshed: {
+          id: "pi-1",
+          provider: "pi",
+          cwd: dir,
+          persistence: { provider: "pi", nativeHandle: piFile },
+        },
+      }),
+    );
+    assert.equal(piRes.status, "ok");
+    assert.equal(piRes.records?.length, 1);
+    assert.equal(piRes.records?.[0].usage.inputTokens, 10000);
+    assert.equal(piRes.records?.[0].usage.cachedInputTokens, 8000);
+    assert.ok(getAgentUsage.output.safeParse(piRes).success);
+
+    const claudeFile = join(dir, "claude-usage.jsonl");
+    await writeFile(
+      claudeFile,
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-01-01T10:00:00Z",
+        message: {
+          id: "msg_c1",
+          role: "assistant",
+          usage: { input_tokens: 100, cache_read_input_tokens: 900, cache_creation_input_tokens: 0, output_tokens: 50 },
+          content: [{ type: "text", text: "Hello" }],
+        },
+      }),
+      "utf8",
+    );
+
+    const claudeRes = await getAgentUsageHandler(
+      { agentId: "cl-1" },
+      mockHandlerContext({
+        refreshed: {
+          id: "cl-1",
+          provider: "claude",
+          cwd: dir,
+          persistence: { provider: "claude", nativeHandle: claudeFile },
+        },
+      }),
+    );
+    assert.equal(claudeRes.status, "ok");
+    assert.equal(claudeRes.records?.length, 1);
+    assert.equal(claudeRes.records?.[0].usage.inputTokens, 1000);
+    assert.equal(claudeRes.records?.[0].usage.cachedInputTokens, 900);
+    assert.ok(getAgentUsage.output.safeParse(claudeRes).success);
+  });
+
+  it("handles devin, antigravity, missing files, Claude sessionId traversal rejection, and error catch branch", async () => {
+    // Missing session file paths for pi and claude
+    const piMissing = await getAgentUsageHandler(
+      { agentId: "pi-missing" },
+      mockHandlerContext({
+        refreshed: {
+          id: "pi-missing",
+          provider: "pi",
+          cwd: dir,
+          persistence: { provider: "pi", nativeHandle: join(dir, "nope.jsonl") },
+        },
+      }),
+    );
+    assert.equal(piMissing.status, "unavailable");
+    assert.match(piMissing.reason ?? "", /pi session file not found/);
+    assert.ok(getAgentUsage.output.safeParse(piMissing).success);
+
+    // Claude sessionId traversal must NOT be promoted into nativeHandle
+    const claudeTraversal = await getAgentUsageHandler(
+      { agentId: "cl-escape" },
+      mockHandlerContext({
+        refreshed: {
+          id: "cl-escape",
+          provider: "claude",
+          cwd: dir,
+          persistence: { provider: "claude", sessionId: "../escape.jsonl" },
+        },
+      }),
+    );
+    assert.equal(claudeTraversal.status, "unavailable");
+    assert.match(claudeTraversal.reason ?? "", /claude session file not found/);
+    assert.ok(getAgentUsage.output.safeParse(claudeTraversal).success);
+
+    // Claude absolute path via sessionId (with nativeHandle unset) must also be rejected
+    const secretFile = join(dir, "secret.jsonl");
+    await writeFile(secretFile, "{}", "utf8");
+    const claudeAbsSessionId = await getAgentUsageHandler(
+      { agentId: "cl-abs-sid" },
+      mockHandlerContext({
+        refreshed: {
+          id: "cl-abs-sid",
+          provider: "claude",
+          cwd: dir,
+          persistence: { provider: "claude", sessionId: secretFile },
+        },
+      }),
+    );
+    assert.equal(claudeAbsSessionId.status, "unavailable");
+    assert.ok(getAgentUsage.output.safeParse(claudeAbsSessionId).success);
+
+    // Devin: unknown session id -> unavailable
+    const devinNoId = await getAgentUsageHandler(
+      { agentId: "dv-noid" },
+      mockHandlerContext({
+        refreshed: { id: "dv-noid", provider: "devin", cwd: dir },
+      }),
+    );
+    assert.equal(devinNoId.status, "unavailable");
+    assert.match(devinNoId.reason ?? "", /devin session id unknown/);
+    assert.ok(getAgentUsage.output.safeParse(devinNoId).success);
+
+    // Devin: valid DB via XDG_DATA_HOME + error catch branch when session is missing from DB
+    const prevXdg = process.env.XDG_DATA_HOME;
+    const xdgRoot = join(dir, "xdg-usage");
+    const devinDir = join(xdgRoot, "devin", "cli");
+    await mkdir(devinDir, { recursive: true });
+    const devinDb = join(devinDir, "sessions.db");
+    execFileSync("sqlite3", [
+      devinDb,
+      `CREATE TABLE sessions (id TEXT PRIMARY KEY, model TEXT, main_chain_id INTEGER);
+       CREATE TABLE message_nodes (node_id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, parent_node_id INTEGER, created_at REAL, chat_message TEXT NOT NULL);
+       INSERT INTO sessions VALUES ('dv-sess-1', 'swe-2', 1);
+       INSERT INTO message_nodes VALUES (1, 'dv-sess-1', NULL, 5000, '{"message_id":"dm1","role":"assistant","content":"Ready","metadata":{"metrics":{"input_tokens":500,"cache_read_tokens":1500,"output_tokens":80,"context_input_tokens":2000}}}');`,
+    ]);
+    process.env.XDG_DATA_HOME = xdgRoot;
+    try {
+      const devinOk = await getAgentUsageHandler(
+        { agentId: "dv-1" },
+        mockHandlerContext({
+          refreshed: {
+            id: "dv-1",
+            provider: "devin",
+            cwd: dir,
+            persistence: { provider: "devin", sessionId: "dv-sess-1" },
+          },
+        }),
+      );
+      assert.equal(devinOk.status, "ok");
+      assert.equal(devinOk.provider, "devin");
+      assert.equal(devinOk.records?.length, 1);
+      assert.equal(devinOk.records?.[0].usage.inputTokens, 2000);
+      assert.equal(devinOk.records?.[0].usage.cachedInputTokens, 1500);
+      assert.ok(getAgentUsage.output.safeParse(devinOk).success);
+
+      // Missing session throws inside readDevinUsage -> caught by handler catch branch
+      const devinErr = await getAgentUsageHandler(
+        { agentId: "dv-err" },
+        mockHandlerContext({
+          refreshed: {
+            id: "dv-err",
+            provider: "devin",
+            cwd: dir,
+            persistence: { provider: "devin", sessionId: "nonexistent-session" },
+          },
+        }),
+      );
+      assert.equal(devinErr.status, "unavailable");
+      assert.match(devinErr.reason ?? "", /no devin session/);
+      assert.ok(getAgentUsage.output.safeParse(devinErr).success);
+    } finally {
+      if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = prevXdg;
+    }
+
+    // Antigravity: missing id, missing db, and valid db with steps table
+    const agNoId = await getAgentUsageHandler(
+      { agentId: "ag-u1" },
+      mockHandlerContext({
+        refreshed: { id: "ag-u1", provider: "antigravity", cwd: dir },
+      }),
+    );
+    assert.equal(agNoId.status, "unavailable");
+    assert.match(agNoId.reason ?? "", /conversation id unknown/);
+    assert.ok(getAgentUsage.output.safeParse(agNoId).success);
+
+    const convId = "22222222-3333-4444-5555-666666666666";
+    const prevHome = process.env.HOME;
+    const agHome = join(dir, "ag-usage-home");
+    process.env.HOME = agHome;
+    try {
+      const agMissingDb = await getAgentUsageHandler(
+        { agentId: "ag-u2" },
+        mockHandlerContext({
+          refreshed: {
+            id: "ag-u2",
+            provider: "antigravity",
+            cwd: dir,
+            persistence: {
+              provider: "antigravity",
+              sessionId: `plugin:${JSON.stringify({ version: 1, data: { conversationId: convId } })}`,
+            },
+          },
+        }),
+      );
+      assert.equal(agMissingDb.status, "unavailable");
+      assert.match(agMissingDb.reason ?? "", /conversation db not found/);
+      assert.ok(getAgentUsage.output.safeParse(agMissingDb).success);
+
+      const convDir = join(agHome, ".gemini", "antigravity-cli", "conversations");
+      await mkdir(convDir, { recursive: true });
+      const dbFile = join(convDir, `${convId}.db`);
+      // Minimal valid planner usage protobuf: meta { f9 { f2: 100 (uncached), f3: 25 (output), f5: 900 (cached) } }
+      // varint(100)=0x64, varint(25)=0x19, varint(900)=0x84 0x07
+      const usageBuf = Buffer.from([0x10, 0x64, 0x18, 0x19, 0x28, 0x84, 0x07]);
+      const metaBuf = Buffer.concat([Buffer.from([0x4a, usageBuf.length]), usageBuf]);
+      const payloadBuf = Buffer.from([0x08, 0x0f]);
+      execFileSync("sqlite3", [
+        dbFile,
+        `CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB, step_payload BLOB);
+         INSERT INTO steps VALUES (1, 15, x'${metaBuf.toString("hex")}', x'${payloadBuf.toString("hex")}');`,
+      ]);
+
+      const agOk = await getAgentUsageHandler(
+        { agentId: "ag-u3" },
+        mockHandlerContext({
+          refreshed: {
+            id: "ag-u3",
+            provider: "antigravity",
+            cwd: dir,
+            persistence: {
+              provider: "antigravity",
+              metadata: {
+                pluginProviderPersistence: { version: 1, data: { conversationId: convId } },
+              },
+            },
+          },
+        }),
+      );
+      assert.equal(agOk.status, "ok");
+      assert.equal(agOk.provider, "antigravity");
+      assert.equal(agOk.records?.length, 1);
+      assert.equal(agOk.records?.[0].usage.inputTokens, 1000);
+      assert.equal(agOk.records?.[0].usage.cachedInputTokens, 900);
+      assert.equal(agOk.records?.[0].usage.outputTokens, 25);
+      assert.ok(getAgentUsage.output.safeParse(agOk).success);
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+    }
+  });
+});
+
 describe("plugin entrypoints", () => {
-  it("registers the server RPC handler", () => {
+  it("registers the server RPC handlers", () => {
     const registered: unknown[] = [];
     const cleanup = contributeServer({
       handle(contract: unknown, handler: unknown) {
@@ -243,9 +519,11 @@ describe("plugin entrypoints", () => {
       },
     } as unknown as PluginServerContext);
 
-    assert.equal(registered.length, 1);
+    assert.equal(registered.length, 2);
     assert.equal((registered[0] as any).contract, getAgentPrompt);
     assert.equal((registered[0] as any).handler, getAgentPromptHandler);
+    assert.equal((registered[1] as any).contract, getAgentUsage);
+    assert.equal((registered[1] as any).handler, getAgentUsageHandler);
     assert.doesNotThrow(() => cleanup());
   });
 
