@@ -1,6 +1,6 @@
 import { useQueries, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Text, View } from "react-native";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Text, View, type StyleProp, type ViewStyle } from "react-native";
 import type { PluginTheme, RpcOutput } from "@getpaseo/plugin";
 import { usePaseo, useRpc, useTabState, type PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { FlatList, Icon, Loading, ScrollView, TextInput } from "@getpaseo/plugin/client/ui";
@@ -16,11 +16,9 @@ import {
   HoverPressable,
   pressBg,
   SectionHeading,
-  SegmentedSort,
   StatusGlyph,
   statusTone,
   TagPill,
-  TinyProgressBar,
 } from "./things-ui";
 import {
   assignUsageToTurns,
@@ -172,6 +170,38 @@ const STATUS_LABEL: Record<TurnStatus, string> = {
   open: "Activity",
 };
 
+function MetaRow({
+  items,
+  theme,
+  style,
+}: {
+  items: ReactNode[];
+  theme: PluginTheme;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const visible = items.filter((item) => item !== null && item !== undefined && item !== false);
+  if (visible.length === 0) return null;
+  return (
+    <View
+      style={[
+        { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
+        style,
+      ]}
+    >
+      {visible.map((item, idx) => (
+        <Fragment key={idx}>
+          {idx > 0 && (
+            <Text style={{ color: withAlpha(theme.colors.foregroundMuted, 0.45), fontSize: 11 }}>
+              ·
+            </Text>
+          )}
+          {item}
+        </Fragment>
+      ))}
+    </View>
+  );
+}
+
 /**
  * Things 3 signature row-to-card morph:
  * - Collapsed: calm, flat, airy list row directly on the canvas (`surface0`).
@@ -225,7 +255,95 @@ function TurnRowCard({
   }
 
   const showStatusWord =
-    turn.status === "running" || turn.status === "failed" || turn.status === "canceled";
+    turn.status === "running" ||
+    turn.status === "canceled" ||
+    (turn.status === "failed" && !turn.error);
+
+  const metaItems: ReactNode[] = [
+    showStatusWord && (
+      <Text
+        style={{
+          color: statusTone(turn.status, theme, tokens).fg,
+          fontSize: 11.5,
+          fontWeight: "600",
+        }}
+      >
+        {turn.status === "running" ? "Running…" : STATUS_LABEL[turn.status]}
+      </Text>
+    ),
+    showCollapsedAgentTag && agentTitle && (
+      <Text
+        style={{
+          color: theme.colors.foregroundMuted,
+          fontSize: 11.5,
+          fontWeight: "500",
+          maxWidth: 160,
+        }}
+        numberOfLines={1}
+      >
+        {agentTitle}
+      </Text>
+    ),
+    summary.toolCount > 0 && (
+      <Text
+        style={{
+          color:
+            summary.failedToolCount > 0
+              ? theme.colors.statusDanger
+              : theme.colors.foregroundMuted,
+          fontSize: 11.5,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {plural(summary.toolCount, "tool")}
+        {summary.failedToolCount > 0 ? ` (${summary.failedToolCount} failed)` : ""}
+      </Text>
+    ),
+    duration !== null && (
+      <Text
+        style={{
+          color: theme.colors.foregroundMuted,
+          fontSize: 11.5,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {formatDuration(duration)}
+      </Text>
+    ),
+    hasTokenUsage(usage) && usage && (
+      <Text
+        style={{
+          color: withAlpha(theme.colors.foregroundMuted, 0.85),
+          fontSize: 11.5,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        ↓{formatTokens(usage.inputTokens)} ↑{formatTokens(usage.outputTokens)}
+      </Text>
+    ),
+    cacheRate !== null && (
+      <Text
+        style={{
+          color: withAlpha(theme.colors.foregroundMuted, 0.85),
+          fontSize: 11.5,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {formatCacheRate(cacheRate)} cache
+      </Text>
+    ),
+    costText ? (
+      <Text
+        style={{
+          color: withAlpha(theme.colors.foregroundMuted, 0.85),
+          fontSize: 11.5,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {costText}
+      </Text>
+    ) : null,
+  ];
 
   return (
     <HoverPressable
@@ -233,9 +351,9 @@ function TurnRowCard({
       accessibilityRole="button"
       accessibilityState={{ expanded: false }}
       style={(state) => ({
-        borderRadius: 10,
+        borderRadius: 9,
         paddingHorizontal: compact ? 8 : 10,
-        paddingVertical: 9,
+        paddingVertical: 8,
         backgroundColor: pressBg(state, tokens),
       })}
     >
@@ -249,7 +367,7 @@ function TurnRowCard({
             <Text
               style={{
                 color: theme.colors.foreground,
-                fontSize: 14.5,
+                fontSize: 14,
                 fontWeight: "500",
                 lineHeight: 20,
                 flex: 1,
@@ -260,9 +378,9 @@ function TurnRowCard({
             </Text>
             <Text
               style={{
-                color: withAlpha(theme.colors.foregroundMuted, 0.78),
+                color: withAlpha(theme.colors.foregroundMuted, 0.72),
                 fontSize: 11.5,
-                marginTop: 3,
+                marginTop: 2,
                 fontVariant: ["tabular-nums"],
               }}
             >
@@ -286,112 +404,7 @@ function TurnRowCard({
             </Text>
           ) : null}
 
-          <View
-            style={{
-              flexDirection: "row",
-              flexWrap: "wrap",
-              alignItems: "center",
-              gap: 8,
-              marginTop: 1,
-            }}
-          >
-            {showStatusWord && (
-              <Text
-                style={{
-                  color: statusTone(turn.status, theme, tokens).fg,
-                  fontSize: 11.5,
-                  fontWeight: "600",
-                }}
-              >
-                {turn.status === "running" ? "Running…" : STATUS_LABEL[turn.status]}
-              </Text>
-            )}
-
-            {showCollapsedAgentTag && agentTitle && (
-              <View
-                style={{
-                  paddingHorizontal: 6,
-                  paddingVertical: 1,
-                  borderRadius: 5,
-                  borderWidth: tokens.hairline,
-                  borderColor: tokens.subtleBorder,
-                  backgroundColor: tokens.subtlePillBg,
-                  maxWidth: 160,
-                }}
-              >
-                <Text
-                  style={{ color: theme.colors.foregroundMuted, fontSize: 11, fontWeight: "500" }}
-                  numberOfLines={1}
-                >
-                  {agentTitle}
-                </Text>
-              </View>
-            )}
-
-            {summary.toolCount > 0 && (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
-                <Icon
-                  name="Wrench"
-                  size={11}
-                  color={
-                    summary.failedToolCount > 0
-                      ? theme.colors.statusDanger
-                      : withAlpha(theme.colors.foregroundMuted, 0.8)
-                  }
-                />
-                <Text
-                  style={{
-                    color:
-                      summary.failedToolCount > 0
-                        ? theme.colors.statusDanger
-                        : theme.colors.foregroundMuted,
-                    fontSize: 11.5,
-                    fontVariant: ["tabular-nums"],
-                  }}
-                >
-                  {plural(summary.toolCount, "tool")}
-                  {summary.failedToolCount > 0 ? ` (${summary.failedToolCount} failed)` : ""}
-                </Text>
-              </View>
-            )}
-
-            {duration !== null && (
-              <Text
-                style={{
-                  color: theme.colors.foregroundMuted,
-                  fontSize: 11.5,
-                  fontVariant: ["tabular-nums"],
-                }}
-              >
-                {formatDuration(duration)}
-              </Text>
-            )}
-
-            {hasTokenUsage(usage) && usage && (
-              <Text
-                style={{
-                  color: withAlpha(theme.colors.foregroundMuted, 0.85),
-                  fontSize: 11.5,
-                  fontVariant: ["tabular-nums"],
-                }}
-              >
-                ↓{formatTokens(usage.inputTokens)} ↑{formatTokens(usage.outputTokens)}
-                {cacheRate !== null ? ` · ${formatCacheRate(cacheRate)} cache` : ""}
-              </Text>
-            )}
-
-            {costText ? (
-              <Text
-                style={{
-                  color: withAlpha(theme.colors.foregroundMuted, 0.85),
-                  fontSize: 11.5,
-                  fontVariant: ["tabular-nums"],
-                }}
-              >
-                {costText}
-              </Text>
-            ) : null}
-          </View>
+          <MetaRow items={metaItems} theme={theme} style={{ marginTop: 1 }} />
         </View>
       </View>
     </HoverPressable>
@@ -429,7 +442,6 @@ function ExpandedTurnCard({
 }) {
   const usage = turn.usage;
   const cacheRate = computeCacheHitRate(usage);
-  const sColor = statusTone(turn.status, theme, tokens);
 
   const stepMeta = useMemo(() => {
     const seen = new Map<string, number>();
@@ -481,6 +493,122 @@ function ExpandedTurnCard({
       ? usage.contextWindowUsedTokens / usage.contextWindowMaxTokens
       : null;
   const contextRatio = rawRatio !== null && Number.isFinite(rawRatio) ? rawRatio : null;
+  const contextColor =
+    contextRatio !== null && contextRatio > 0.85
+      ? theme.colors.statusDanger
+      : contextRatio !== null && contextRatio > 0.65
+        ? theme.colors.statusWarning
+        : theme.colors.foregroundMuted;
+
+  const showExpandedStatus =
+    turn.status === "running" || turn.status === "failed" || turn.status === "canceled";
+
+  const metaItems: ReactNode[] = [
+    showExpandedStatus && (
+      <Text
+        style={{
+          color: statusTone(turn.status, theme, tokens).fg,
+          fontSize: 11.5,
+          fontWeight: "600",
+        }}
+      >
+        {turn.status === "running" ? "Running…" : STATUS_LABEL[turn.status]}
+      </Text>
+    ),
+    agentTitle &&
+      (onOpenAgent ? (
+        <HoverPressable
+          onPress={onOpenAgent}
+          accessibilityRole="button"
+          style={(state) => ({
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 3,
+            paddingHorizontal: 5,
+            paddingVertical: 1,
+            marginHorizontal: -5,
+            borderRadius: 5,
+            backgroundColor: pressBg(state, tokens),
+          })}
+        >
+          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11.5, fontWeight: "500" }}>
+            {agentTitle}
+          </Text>
+          <Icon name="ArrowUpRight" size={11} color={theme.colors.foregroundMuted} />
+        </HoverPressable>
+      ) : (
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11.5, fontWeight: "500" }}>
+          {agentTitle}
+        </Text>
+      )),
+    turn.startedAt && (
+      <Text
+        style={{
+          color: theme.colors.foregroundMuted,
+          fontSize: 11.5,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {formatClock(turn.startedAt)}
+      </Text>
+    ),
+    duration !== null && (
+      <Text
+        style={{
+          color: theme.colors.foregroundMuted,
+          fontSize: 11.5,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {formatDuration(duration)}
+      </Text>
+    ),
+    hasTokenUsage(usage) && usage && (
+      <Text
+        style={{
+          color: theme.colors.foregroundMuted,
+          fontSize: 11.5,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        ↓{formatTokens(usage.inputTokens)} ↑{formatTokens(usage.outputTokens)}
+      </Text>
+    ),
+    cacheRate !== null && (
+      <Text
+        style={{
+          color: theme.colors.foregroundMuted,
+          fontSize: 11.5,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {formatCacheRate(cacheRate)} cache
+      </Text>
+    ),
+    contextRatio !== null && (
+      <Text
+        style={{
+          color: contextColor,
+          fontSize: 11.5,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {Math.round(Math.max(0, contextRatio) * 100)}% ctx
+      </Text>
+    ),
+    costText ? (
+      <Text
+        style={{
+          color: theme.colors.foregroundMuted,
+          fontSize: 11.5,
+          fontWeight: "500",
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {costText}
+      </Text>
+    ) : null,
+  ];
 
   return (
     <View
@@ -489,18 +617,18 @@ function ExpandedTurnCard({
         borderRadius: 12,
         borderWidth: 1,
         borderColor: tokens.subtleBorder,
-        marginVertical: 8,
-        paddingHorizontal: compact ? 12 : 16,
-        paddingTop: 14,
+        marginVertical: 6,
+        paddingHorizontal: compact ? 12 : 14,
+        paddingTop: 12,
         paddingBottom: 10,
-        gap: 10,
+        gap: 8,
         ...tokens.cardShadow,
       }}
     >
       {/* Card Header */}
       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
         <View style={{ marginTop: 3 }}>
-          <StatusGlyph status={turn.status} theme={theme} tokens={tokens} size={17} />
+          <StatusGlyph status={turn.status} theme={theme} tokens={tokens} size={16} />
         </View>
 
         <HoverPressable
@@ -513,9 +641,9 @@ function ExpandedTurnCard({
             selectable
             style={{
               color: theme.colors.foreground,
-              fontSize: 15,
+              fontSize: 14.5,
               fontWeight: "600",
-              lineHeight: 21,
+              lineHeight: 20,
             }}
           >
             {turn.prompt?.trim() || STATUS_LABEL[turn.status]}
@@ -523,14 +651,30 @@ function ExpandedTurnCard({
         </HoverPressable>
 
         <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
-          {turn.prompt?.trim() && (
-            <CopyButton
-              text={turn.prompt.trim()}
-              toastMessage="Copied prompt"
-              theme={theme}
-              tokens={tokens}
-            />
+          {expandableKeys.length > 1 && (
+            <HoverPressable
+              onPress={toggleAllSteps}
+              accessibilityRole="button"
+              accessibilityLabel={allStepsOpen ? "Collapse all steps" : "Expand all steps"}
+              style={(state) => ({
+                padding: 5,
+                borderRadius: 6,
+                backgroundColor: pressBg(state, tokens),
+              })}
+            >
+              <Icon
+                name={allStepsOpen ? "ChevronsDownUp" : "ChevronsUpDown"}
+                size={13}
+                color={theme.colors.foregroundMuted}
+              />
+            </HoverPressable>
           )}
+          <CopyButton
+            text={() => buildTurnSummaryText(turn, agentTitle)}
+            toastMessage="Copied turn summary"
+            theme={theme}
+            tokens={tokens}
+          />
           <HoverPressable
             onPress={onCollapse}
             accessibilityRole="button"
@@ -552,124 +696,14 @@ function ExpandedTurnCard({
           tone="danger"
           icon="CircleAlert"
           text={turn.error}
-          style={{ marginLeft: 27 }}
+          style={{ marginLeft: 26 }}
           theme={theme}
           tokens={tokens}
         />
       )}
 
       {/* Quiet Metadata Strip */}
-      <View
-        style={{
-          marginLeft: 27,
-          flexDirection: "row",
-          flexWrap: "wrap",
-          alignItems: "center",
-          gap: 8,
-        }}
-      >
-        <View
-          style={{
-            paddingHorizontal: 7,
-            paddingVertical: 2,
-            borderRadius: 999,
-            backgroundColor: sColor.bg,
-          }}
-        >
-          <Text style={{ color: sColor.fg, fontSize: 11, fontWeight: "600" }}>
-            {STATUS_LABEL[turn.status]}
-          </Text>
-        </View>
-
-        {agentTitle && (
-          <HoverPressable
-            onPress={onOpenAgent}
-            disabled={!onOpenAgent}
-            accessibilityRole={onOpenAgent ? "button" : undefined}
-            style={(state) => ({
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 4,
-              paddingHorizontal: 7,
-              paddingVertical: 2,
-              borderRadius: 6,
-              borderWidth: tokens.hairline,
-              borderColor: tokens.subtleBorder,
-              backgroundColor: onOpenAgent
-                ? pressBg(state, tokens, tokens.subtlePillBg)
-                : tokens.subtlePillBg,
-            })}
-          >
-            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11.5, fontWeight: "500" }}>
-              {agentTitle}
-            </Text>
-            {onOpenAgent && (
-              <Icon name="ArrowUpRight" size={11} color={theme.colors.foregroundMuted} />
-            )}
-          </HoverPressable>
-        )}
-
-        {turn.startedAt && (
-          <Text
-            style={{
-              color: theme.colors.foregroundMuted,
-              fontSize: 11.5,
-              fontVariant: ["tabular-nums"],
-            }}
-          >
-            {formatClock(turn.startedAt)}
-            {duration !== null ? ` · ${formatDuration(duration)}` : ""}
-          </Text>
-        )}
-
-        {hasTokenUsage(usage) && usage && (
-          <Text
-            style={{
-              color: theme.colors.foregroundMuted,
-              fontSize: 11.5,
-              fontVariant: ["tabular-nums"],
-            }}
-          >
-            ↓{formatTokens(usage.inputTokens)}
-            {cacheRate !== null
-              ? typeof usage.cachedInputTokens === "number" &&
-                Number.isFinite(usage.cachedInputTokens) &&
-                usage.cachedInputTokens > 0
-                ? ` (${formatTokens(usage.cachedInputTokens)} · ${formatCacheRate(cacheRate)} cache)`
-                : ` (${formatCacheRate(cacheRate)} cache)`
-              : ""}{" "}
-            ↑{formatTokens(usage.outputTokens)}
-          </Text>
-        )}
-
-        {contextRatio !== null && (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-            <TinyProgressBar ratio={contextRatio} theme={theme} tokens={tokens} />
-            <Text
-              style={{
-                color: theme.colors.foregroundMuted,
-                fontSize: 11,
-                fontVariant: ["tabular-nums"],
-              }}
-            >
-              {Math.round(Math.max(0, contextRatio) * 100)}% ctx
-            </Text>
-          </View>
-        )}
-
-        {costText ? (
-          <Text
-            style={{
-              color: theme.colors.foregroundMuted,
-              fontSize: 11.5,
-              fontWeight: "500",
-              fontVariant: ["tabular-nums"],
-            }}
-          >
-            {costText}
-          </Text>
-        ) : null}
-      </View>
+      <MetaRow items={metaItems} theme={theme} style={{ marginLeft: 26 }} />
 
       <View style={{ height: tokens.hairline, backgroundColor: tokens.subtleBorder, marginTop: 2 }} />
 
@@ -687,7 +721,6 @@ function ExpandedTurnCard({
             entry={entry}
             description={description}
             itemUsage={itemUsages?.get(idx)}
-            compact={compact}
             theme={theme}
             tokens={tokens}
             expanded={openSteps.has(key)}
@@ -695,88 +728,12 @@ function ExpandedTurnCard({
           />
         ))}
       </View>
-
-      {/* Quiet Card Footer Bar */}
-      <View
-        style={{
-          flexDirection: "row",
-          flexWrap: "wrap",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 8,
-          paddingTop: 8,
-          borderTopWidth: tokens.hairline,
-          borderTopColor: tokens.subtleBorder,
-        }}
-      >
-        <Text
-          style={{
-            color: withAlpha(theme.colors.foregroundMuted, 0.8),
-            fontSize: 11.5,
-            fontVariant: ["tabular-nums"],
-          }}
-        >
-          {plural(summary.stepCount, "step")}
-          {summary.toolCount > 0 ? ` · ${plural(summary.toolCount, "tool")}` : ""}
-          {summary.thinkingCount > 0 ? ` · ${plural(summary.thinkingCount, "thought")}` : ""}
-        </Text>
-
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-          {expandableKeys.length > 1 && (
-            <HoverPressable
-              onPress={toggleAllSteps}
-              accessibilityRole="button"
-              style={(state) => ({
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 4,
-                paddingHorizontal: 7,
-                paddingVertical: 4,
-                borderRadius: 6,
-                backgroundColor: pressBg(state, tokens),
-              })}
-            >
-              <Icon
-                name={allStepsOpen ? "ChevronsDownUp" : "ChevronsUpDown"}
-                size={12}
-                color={theme.colors.foregroundMuted}
-              />
-              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11.5, fontWeight: "500" }}>
-                {allStepsOpen ? "Collapse steps" : "Expand all"}
-              </Text>
-            </HoverPressable>
-          )}
-
-          <CopyButton
-            text={() => buildTurnSummaryText(turn, agentTitle)}
-            label="Copy"
-            toastMessage="Copied turn summary"
-            theme={theme}
-            tokens={tokens}
-          />
-
-          <HoverPressable
-            onPress={onCollapse}
-            accessibilityRole="button"
-            style={({ hovered, pressed }) => ({
-              paddingHorizontal: 9,
-              paddingVertical: 4,
-              borderRadius: 6,
-              backgroundColor: pressed || hovered ? tokens.accentSoft : tokens.subtlePillBg,
-            })}
-          >
-            <Text style={{ color: theme.colors.accent, fontSize: 11.5, fontWeight: "600" }}>
-              Done
-            </Text>
-          </HoverPressable>
-        </View>
-      </View>
     </View>
   );
 }
 
 type ListRow =
-  | { type: "section"; id: string; label: string; count: number; liveCount: number; first: boolean }
+  | { type: "section"; id: string; label: string; count: number; first: boolean }
   | { type: "turn"; id: string; turn: Turn };
 
 export function TurnsPanel({
@@ -935,7 +892,6 @@ export function TurnsPanel({
         id: `section:${group.id}`,
         label: group.label,
         count: group.turns.length,
-        liveCount: group.turns.filter((t) => t.status === "running").length,
         first: index === 0,
       });
       for (const turn of group.turns) {
@@ -961,10 +917,14 @@ export function TurnsPanel({
     return { errors: [...errors], anyLoading, anyLoadingOlder, olderAgentIds };
   }, [visibleFeeds, agentsError]);
 
-  const hasVisibleExpanded = useMemo(
-    () => expandedKeys.size > 0 && filteredTurns.some((t) => expandedKeys.has(t.key)),
-    [expandedKeys, filteredTurns],
-  );
+  const expandedVisibleCount = useMemo(() => {
+    if (expandedKeys.size === 0) return 0;
+    let n = 0;
+    for (const t of filteredTurns) {
+      if (expandedKeys.has(t.key)) n += 1;
+    }
+    return n;
+  }, [expandedKeys, filteredTurns]);
 
   const toggleTurn = useCallback((key: string) => {
     setExpandedKeys((prev) => {
@@ -987,8 +947,6 @@ export function TurnsPanel({
   const subtitleParts = useMemo(() => {
     if (counts.total === 0) return [];
     const parts: string[] = [plural(counts.total, "turn")];
-    if (counts.running > 0) parts.push(`${counts.running} running`);
-    if (counts.failed > 0) parts.push(`${counts.failed} failed`);
     if (counts.tokensTotal !== undefined) parts.push(`${formatTokens(counts.tokensTotal)} tokens`);
     if (counts.cacheHitRate !== undefined) {
       parts.push(`${formatCacheRate(counts.cacheHitRate)} cache`);
@@ -1005,7 +963,7 @@ export function TurnsPanel({
   const hasOlder = feedStatus.olderAgentIds.length > 0;
 
   const loadOlderRow = (
-    <View style={{ alignItems: "center", paddingVertical: 14 }}>
+    <View style={{ alignItems: "center", paddingVertical: 12 }}>
       <HoverPressable
         onPress={() => {
           for (const agentId of feedStatus.olderAgentIds) void loadOlder(agentId);
@@ -1013,20 +971,14 @@ export function TurnsPanel({
         disabled={feedStatus.anyLoadingOlder}
         accessibilityRole="button"
         style={(state) => ({
-          flexDirection: "row",
-          alignItems: "center",
-          gap: 6,
           paddingHorizontal: 14,
-          paddingVertical: 7,
+          paddingVertical: 6,
           borderRadius: 999,
-          borderWidth: 1,
-          borderColor: tokens.subtleBorder,
-          backgroundColor: pressBg(state, tokens, theme.colors.surface1),
+          backgroundColor: pressBg(state, tokens, tokens.subtlePillBg),
         })}
       >
-        <Icon name="History" size={13} color={theme.colors.accent} />
-        <Text style={{ color: theme.colors.accent, fontSize: 12.5, fontWeight: "500" }}>
-          {feedStatus.anyLoadingOlder ? "Loading earlier activity…" : "Load earlier activity"}
+        <Text style={{ color: theme.colors.accent, fontSize: 12, fontWeight: "500" }}>
+          {feedStatus.anyLoadingOlder ? "Loading…" : "Load earlier"}
         </Text>
       </HoverPressable>
     </View>
@@ -1040,11 +992,11 @@ export function TurnsPanel({
           width: "100%",
           maxWidth: 780,
           alignSelf: "center",
-          paddingHorizontal: layout.compact ? 12 : 28,
+          paddingHorizontal: layout.compact ? 12 : 24,
         }}
       >
         {/* View Header */}
-        <View style={{ paddingTop: layout.compact ? 14 : 22, paddingBottom: 10, gap: 10 }}>
+        <View style={{ paddingTop: layout.compact ? 10 : 14, paddingBottom: 8, gap: 8 }}>
           <View
             style={{
               flexDirection: "row",
@@ -1053,48 +1005,34 @@ export function TurnsPanel({
               gap: 10,
             }}
           >
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flexShrink: 1 }}>
-              <View
+            <View style={{ flexShrink: 1 }}>
+              <Text
                 style={{
-                  width: 30,
-                  height: 30,
-                  borderRadius: 8,
-                  backgroundColor: tokens.accentSoft,
-                  alignItems: "center",
-                  justifyContent: "center",
+                  color: theme.colors.foreground,
+                  fontSize: layout.compact ? 18 : 20,
+                  fontWeight: "700",
+                  letterSpacing: -0.3,
                 }}
               >
-                <Icon name="History" size={16} color={theme.colors.accent} />
-              </View>
-              <View style={{ flexShrink: 1 }}>
+                Turns
+              </Text>
+              {subtitleParts.length > 0 && (
                 <Text
                   style={{
-                    color: theme.colors.foreground,
-                    fontSize: layout.compact ? 21 : 24,
-                    fontWeight: "700",
-                    letterSpacing: -0.4,
+                    color: theme.colors.foregroundMuted,
+                    fontSize: 11.5,
+                    fontVariant: ["tabular-nums"],
+                    marginTop: 1,
                   }}
+                  numberOfLines={1}
                 >
-                  Turns
+                  {subtitleParts.join(" · ")}
                 </Text>
-                {subtitleParts.length > 0 && (
-                  <Text
-                    style={{
-                      color: theme.colors.foregroundMuted,
-                      fontSize: 12,
-                      fontVariant: ["tabular-nums"],
-                      marginTop: 1,
-                    }}
-                    numberOfLines={1}
-                  >
-                    {subtitleParts.join(" · ")}
-                  </Text>
-                )}
-              </View>
+              )}
             </View>
 
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-              {hasVisibleExpanded && (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+              {expandedVisibleCount >= 2 && (
                 <HoverPressable
                   onPress={() => setExpandedKeys(new Set())}
                   accessibilityRole="button"
@@ -1103,7 +1041,7 @@ export function TurnsPanel({
                     flexDirection: "row",
                     alignItems: "center",
                     gap: 4,
-                    paddingHorizontal: 8,
+                    paddingHorizontal: 7,
                     paddingVertical: 5,
                     borderRadius: 7,
                     backgroundColor: pressBg(state, tokens),
@@ -1133,9 +1071,7 @@ export function TurnsPanel({
                 accessibilityLabel="Search turns"
                 style={(state) => ({
                   padding: 6,
-                  borderRadius: 8,
-                  borderWidth: tokens.hairline,
-                  borderColor: searchOpen ? tokens.accentBorder : tokens.subtleBorder,
+                  borderRadius: 7,
                   backgroundColor: searchOpen ? tokens.accentSoft : pressBg(state, tokens),
                 })}
               >
@@ -1146,12 +1082,37 @@ export function TurnsPanel({
                 />
               </HoverPressable>
 
-              <SegmentedSort
-                value={state.sort}
-                theme={theme}
-                tokens={tokens}
-                onChange={(sort) => setState({ ...state, sort })}
-              />
+              <HoverPressable
+                onPress={() =>
+                  setState({ ...state, sort: state.sort === "newest" ? "oldest" : "newest" })
+                }
+                accessibilityRole="button"
+                accessibilityLabel={`Sort order: ${state.sort === "newest" ? "newest first" : "oldest first"}`}
+                style={(state) => ({
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 4,
+                  paddingHorizontal: 8,
+                  paddingVertical: 5,
+                  borderRadius: 7,
+                  backgroundColor: pressBg(state, tokens, tokens.subtlePillBg),
+                })}
+              >
+                <Icon
+                  name={state.sort === "newest" ? "ArrowDown" : "ArrowUp"}
+                  size={12}
+                  color={theme.colors.foregroundMuted}
+                />
+                <Text
+                  style={{
+                    color: theme.colors.foregroundMuted,
+                    fontSize: 12,
+                    fontWeight: "500",
+                  }}
+                >
+                  {state.sort === "newest" ? "Newest" : "Oldest"}
+                </Text>
+              </HoverPressable>
             </View>
           </View>
 
@@ -1163,18 +1124,18 @@ export function TurnsPanel({
                 alignItems: "center",
                 gap: 8,
                 backgroundColor: theme.colors.surface1,
-                borderRadius: 9,
+                borderRadius: 8,
                 borderWidth: 1,
                 borderColor: searchQuery.length > 0 ? tokens.accentBorder : tokens.subtleBorder,
                 paddingHorizontal: 10,
-                paddingVertical: layout.compact ? 7 : 6,
+                paddingVertical: layout.compact ? 6 : 5,
               }}
             >
               <Icon name="Search" size={14} color={theme.colors.foregroundMuted} />
               <TextInput
                 value={searchQuery}
                 onChangeText={setSearchQuery}
-                placeholder="Filter turns, replies, tools, files…"
+                placeholder="Search turns, tools, files…"
                 placeholderTextColor={withAlpha(theme.colors.foregroundMuted, 0.7)}
                 autoFocus
                 returnKeyType="search"
@@ -1217,14 +1178,14 @@ export function TurnsPanel({
               contentContainerStyle={{
                 flexDirection: "row",
                 alignItems: "center",
-                gap: 6,
+                gap: 4,
                 paddingVertical: 1,
               }}
             >
               {agents.length > 1 && (
                 <>
                   <TagPill
-                    label="All agents"
+                    label="All"
                     selected={selectedAgentId === "all"}
                     theme={theme}
                     tokens={tokens}
@@ -1249,9 +1210,9 @@ export function TurnsPanel({
                   <View
                     style={{
                       width: 1,
-                      height: 16,
+                      height: 14,
                       backgroundColor: tokens.subtleBorder,
-                      marginHorizontal: 2,
+                      marginHorizontal: 3,
                     }}
                   />
                 )}
@@ -1319,30 +1280,19 @@ export function TurnsPanel({
                 alignItems: "center",
                 justifyContent: "center",
                 paddingHorizontal: 24,
-                paddingBottom: 72,
-                gap: 10,
+                paddingBottom: 64,
+                gap: 8,
               }}
             >
-              <View
-                style={{
-                  width: 48,
-                  height: 48,
-                  borderRadius: 24,
-                  backgroundColor: tokens.subtlePillBg,
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <Icon
-                  name={hasActiveFilters ? "Search" : "History"}
-                  size={20}
-                  color={theme.colors.foregroundMuted}
-                />
-              </View>
+              <Icon
+                name={hasActiveFilters ? "Search" : "History"}
+                size={20}
+                color={withAlpha(theme.colors.foregroundMuted, 0.7)}
+              />
               <Text
                 style={{
                   color: theme.colors.foreground,
-                  fontSize: 15,
+                  fontSize: 14,
                   fontWeight: "600",
                   textAlign: "center",
                 }}
@@ -1356,17 +1306,17 @@ export function TurnsPanel({
               <Text
                 style={{
                   color: theme.colors.foregroundMuted,
-                  fontSize: 13,
+                  fontSize: 12.5,
                   textAlign: "center",
-                  lineHeight: 19,
-                  maxWidth: 320,
+                  lineHeight: 18,
+                  maxWidth: 280,
                 }}
               >
                 {hasActiveFilters
-                  ? "Try clearing your search or switching agent and status filters."
+                  ? "Adjust your search or filters to see turns."
                   : agents.length === 0
-                    ? "Start an agent in this workspace to inspect prompts, tool calls, and replies here."
-                    : "Agent activity will stream into this timeline as soon as a turn begins."}
+                    ? "Start an agent in this workspace to inspect turns."
+                    : "Turns appear here as soon as an agent runs."}
               </Text>
               {hasActiveFilters && (
                 <HoverPressable
@@ -1374,15 +1324,13 @@ export function TurnsPanel({
                   accessibilityRole="button"
                   style={({ hovered, pressed }) => ({
                     marginTop: 4,
-                    paddingHorizontal: 14,
-                    paddingVertical: 6,
+                    paddingHorizontal: 12,
+                    paddingVertical: 5,
                     borderRadius: 999,
-                    borderWidth: 1,
-                    borderColor: tokens.accentBorder,
-                    backgroundColor: pressed || hovered ? tokens.accentSoft : "transparent",
+                    backgroundColor: pressed || hovered ? tokens.accentSoft : tokens.subtlePillBg,
                   })}
                 >
-                  <Text style={{ color: theme.colors.accent, fontSize: 12.5, fontWeight: "600" }}>
+                  <Text style={{ color: theme.colors.accent, fontSize: 12, fontWeight: "600" }}>
                     Clear filters
                   </Text>
                 </HoverPressable>
@@ -1394,7 +1342,7 @@ export function TurnsPanel({
           <FlatList
             data={listRows}
             keyExtractor={(row) => row.id}
-            contentContainerStyle={{ paddingBottom: 36 }}
+            contentContainerStyle={{ paddingBottom: 32 }}
             showsVerticalScrollIndicator={false}
             renderItem={({ item }) => {
               if (item.type === "section") {
@@ -1402,7 +1350,6 @@ export function TurnsPanel({
                   <SectionHeading
                     label={item.label}
                     count={item.count}
-                    liveCount={item.liveCount}
                     first={item.first}
                     theme={theme}
                     tokens={tokens}

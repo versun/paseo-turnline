@@ -19,7 +19,6 @@ import {
   computeCacheHitRate,
   formatCacheRate,
   formatItemUsageDetail,
-  formatTimeOnly,
   formatTokens,
   formatToolError,
   plural,
@@ -623,47 +622,27 @@ function ReasoningWell({
 
 function ItemUsageInline({
   itemUsage,
-  compact,
   theme,
   tokens,
 }: {
   itemUsage?: ItemUsageDisplay;
-  compact?: boolean;
   theme: PluginTheme;
   tokens: ThingsTokens;
 }) {
-  if (!itemUsage) {
-    return (
-      <Text
-        style={{
-          color: withAlpha(theme.colors.foregroundMuted, 0.45),
-          fontSize: 11,
-          fontVariant: ["tabular-nums"],
-        }}
-      >
-        —
-      </Text>
-    );
-  }
+  if (!itemUsage) return null;
 
   const { usage, inputOnly } = itemUsage;
   const tokensText = inputOnly
     ? `↓${formatTokens(usage.inputTokens)}`
     : `↓${formatTokens(usage.inputTokens)} ↑${formatTokens(usage.outputTokens)}`;
   const cacheRate = computeCacheHitRate(usage);
-  const cacheText =
-    cacheRate !== null
-      ? compact
-        ? formatCacheRate(cacheRate)
-        : `${formatCacheRate(cacheRate)} cache`
-      : "—";
   const highCache = cacheRate !== null && cacheRate >= 0.5;
 
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flexShrink: 0 }}>
       <Text
         style={{
-          color: withAlpha(theme.colors.foregroundMuted, 0.88),
+          color: withAlpha(theme.colors.foregroundMuted, 0.85),
           fontSize: 11,
           fontVariant: ["tabular-nums"],
         }}
@@ -671,28 +650,30 @@ function ItemUsageInline({
       >
         {tokensText}
       </Text>
-      <View
-        style={{
-          paddingHorizontal: 5,
-          paddingVertical: 1,
-          borderRadius: 999,
-          backgroundColor: highCache ? tokens.successSoft : tokens.subtlePillBg,
-        }}
-      >
-        <Text
+      {cacheRate !== null && (
+        <View
           style={{
-            color: highCache
-              ? theme.colors.statusSuccess
-              : withAlpha(theme.colors.foregroundMuted, cacheRate !== null && cacheRate > 0 ? 0.92 : 0.72),
-            fontSize: 10.5,
-            fontWeight: highCache ? "600" : "500",
-            fontVariant: ["tabular-nums"],
+            paddingHorizontal: 5,
+            paddingVertical: 1,
+            borderRadius: 999,
+            backgroundColor: highCache ? tokens.successSoft : tokens.subtlePillBg,
           }}
-          numberOfLines={1}
         >
-          {cacheText}
-        </Text>
-      </View>
+          <Text
+            style={{
+              color: highCache
+                ? theme.colors.statusSuccess
+                : withAlpha(theme.colors.foregroundMuted, cacheRate > 0 ? 0.9 : 0.72),
+              fontSize: 10.5,
+              fontWeight: highCache ? "600" : "500",
+              fontVariant: ["tabular-nums"],
+            }}
+            numberOfLines={1}
+          >
+            {formatCacheRate(cacheRate)}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -701,7 +682,6 @@ export function ItemRow({
   entry,
   description,
   itemUsage,
-  compact,
   theme,
   tokens,
   expanded,
@@ -710,7 +690,6 @@ export function ItemRow({
   entry: FeedEntry;
   description?: ItemDescription;
   itemUsage?: ItemUsageDisplay;
-  compact?: boolean;
   theme: PluginTheme;
   tokens: ThingsTokens;
   expanded: boolean;
@@ -773,11 +752,15 @@ export function ItemRow({
           backgroundColor: d.expandable ? pressBg(state, tokens) : "transparent",
         })}
       >
-        <Icon
-          name={d.expandable ? (expanded ? "ChevronDown" : "ChevronRight") : "Minus"}
-          size={12}
-          color={withAlpha(theme.colors.foregroundMuted, d.expandable ? 0.75 : 0.35)}
-        />
+        {d.expandable ? (
+          <Icon
+            name={expanded ? "ChevronDown" : "ChevronRight"}
+            size={12}
+            color={withAlpha(theme.colors.foregroundMuted, 0.75)}
+          />
+        ) : (
+          <View style={{ width: 12 }} />
+        )}
         <Icon name={d.icon} size={14} color={iconColor} />
         <Text
           numberOfLines={1}
@@ -818,24 +801,7 @@ export function ItemRow({
           {expanded ? "" : (d.summary ?? "")}
         </Text>
 
-        <ItemUsageInline
-          itemUsage={itemUsage}
-          compact={compact}
-          theme={theme}
-          tokens={tokens}
-        />
-
-        <Text
-          numberOfLines={1}
-          style={{
-            color: withAlpha(theme.colors.foregroundMuted, 0.72),
-            fontSize: 11,
-            fontVariant: ["tabular-nums"],
-            flexShrink: 0,
-          }}
-        >
-          {formatTimeOnly(entry.timestamp)}
-        </Text>
+        <ItemUsageInline itemUsage={itemUsage} theme={theme} tokens={tokens} />
       </HoverPressable>
 
       {expanded && (

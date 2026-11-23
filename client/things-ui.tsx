@@ -230,7 +230,7 @@ export function StatusGlyph({
 
 /**
  * Things 3 hairline filter tag pill.
- * Quiet and understated when inactive; softly tinted with a subtle hairline ring when selected.
+ * Quiet and borderless when inactive; softly tinted when selected.
  */
 export function TagPill({
   label,
@@ -263,12 +263,12 @@ export function TagPill({
       style={(state) => ({
         flexDirection: "row",
         alignItems: "center",
-        gap: 6,
-        paddingHorizontal: 10,
+        gap: 5,
+        paddingHorizontal: 9,
         paddingVertical: 4,
         borderRadius: 999,
         borderWidth: 1,
-        borderColor: selected ? activeBorder : tokens.subtleBorder,
+        borderColor: selected ? activeBorder : "transparent",
         backgroundColor: selected ? activeBg : pressBg(state, tokens),
       })}
     >
@@ -290,7 +290,7 @@ export function TagPill({
           style={{
             color: selected
               ? withAlpha(activeColor, 0.85)
-              : withAlpha(theme.colors.foregroundMuted, 0.72),
+              : withAlpha(theme.colors.foregroundMuted, 0.7),
             fontSize: 11,
             fontVariant: ["tabular-nums"],
           }}
@@ -303,19 +303,17 @@ export function TagPill({
 }
 
 /**
- * Things 3 Logbook-style date / group section heading with a delicate hairline rule.
+ * Things 3 Logbook-style date section heading with a delicate hairline rule.
  */
 export function SectionHeading({
   label,
   count,
-  liveCount,
   first,
   theme,
   tokens,
 }: {
   label: string;
   count: number;
-  liveCount?: number;
   first?: boolean;
   theme: PluginTheme;
   tokens: ThingsTokens;
@@ -326,130 +324,34 @@ export function SectionHeading({
         flexDirection: "row",
         alignItems: "baseline",
         justifyContent: "space-between",
-        paddingTop: first ? 6 : 20,
-        paddingBottom: 6,
+        paddingTop: first ? 4 : 18,
+        paddingBottom: 5,
         paddingHorizontal: 8,
         marginBottom: 4,
         borderBottomWidth: tokens.hairline,
         borderBottomColor: tokens.subtleBorder,
       }}
     >
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
-        <Text
-          style={{
-            color: theme.colors.foreground,
-            fontSize: 13,
-            fontWeight: "700",
-            letterSpacing: -0.1,
-          }}
-        >
-          {label}
-        </Text>
-        {liveCount !== undefined && liveCount > 0 && (
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 4,
-              paddingHorizontal: 6,
-              paddingVertical: 1.5,
-              borderRadius: 999,
-              backgroundColor: tokens.accentSoft,
-            }}
-          >
-            <View
-              style={{
-                width: 5,
-                height: 5,
-                borderRadius: 3,
-                backgroundColor: theme.colors.accent,
-              }}
-            />
-            <Text style={{ color: theme.colors.accent, fontSize: 10.5, fontWeight: "600" }}>
-              {liveCount === 1 ? "Live" : `${liveCount} live`}
-            </Text>
-          </View>
-        )}
-      </View>
       <Text
         style={{
-          color: withAlpha(theme.colors.foregroundMuted, 0.75),
-          fontSize: 11.5,
+          color: theme.colors.foreground,
+          fontSize: 12.5,
+          fontWeight: "600",
+          letterSpacing: -0.1,
+        }}
+      >
+        {label}
+      </Text>
+      <Text
+        style={{
+          color: withAlpha(theme.colors.foregroundMuted, 0.72),
+          fontSize: 11,
           fontWeight: "500",
           fontVariant: ["tabular-nums"],
         }}
       >
         {count}
       </Text>
-    </View>
-  );
-}
-
-/**
- * Subtle Things-style segmented sort control.
- */
-export function SegmentedSort({
-  value,
-  theme,
-  tokens,
-  onChange,
-}: {
-  value: "newest" | "oldest";
-  theme: PluginTheme;
-  tokens: ThingsTokens;
-  onChange: (next: "newest" | "oldest") => void;
-}) {
-  return (
-    <View
-      style={{
-        flexDirection: "row",
-        backgroundColor: tokens.subtlePillBg,
-        borderRadius: 8,
-        padding: 2,
-        borderWidth: tokens.hairline,
-        borderColor: tokens.subtleBorder,
-      }}
-    >
-      {(["newest", "oldest"] as const).map((option) => {
-        const selected = value === option;
-        return (
-          <HoverPressable
-            key={option}
-            onPress={() => onChange(option)}
-            accessibilityRole="button"
-            accessibilityState={{ selected }}
-            style={({ hovered }) => ({
-              paddingHorizontal: 9,
-              paddingVertical: 4,
-              borderRadius: 6,
-              backgroundColor: selected
-                ? theme.colors.surface1
-                : hovered
-                  ? tokens.rowHoverBg
-                  : "transparent",
-              ...(selected
-                ? {
-                    shadowColor: "#000000",
-                    shadowOffset: { width: 0, height: 1 },
-                    shadowOpacity: tokens.dark ? 0.25 : 0.06,
-                    shadowRadius: 2,
-                    elevation: 1,
-                  }
-                : null),
-            })}
-          >
-            <Text
-              style={{
-                color: selected ? theme.colors.foreground : theme.colors.foregroundMuted,
-                fontSize: 12,
-                fontWeight: selected ? "600" : "500",
-              }}
-            >
-              {option === "newest" ? "Newest" : "Oldest"}
-            </Text>
-          </HoverPressable>
-        );
-      })}
     </View>
   );
 }
@@ -739,47 +641,6 @@ export function CalloutBox({
       >
         {text}
       </Text>
-    </View>
-  );
-}
-
-/**
- * Subtle Things-style horizontal fill bar for context window utilization.
- */
-export function TinyProgressBar({
-  ratio,
-  theme,
-  tokens,
-}: {
-  ratio: number;
-  theme: PluginTheme;
-  tokens: ThingsTokens;
-}) {
-  const clamped = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0;
-  const fillColor =
-    clamped > 0.85
-      ? theme.colors.statusDanger
-      : clamped > 0.65
-        ? theme.colors.statusWarning
-        : theme.colors.accent;
-  return (
-    <View
-      style={{
-        width: 36,
-        height: 4,
-        borderRadius: 2,
-        backgroundColor: tokens.subtlePillBg,
-        overflow: "hidden",
-      }}
-    >
-      <View
-        style={{
-          width: `${Math.round(clamped * 100)}%`,
-          height: "100%",
-          borderRadius: 2,
-          backgroundColor: fillColor,
-        }}
-      />
     </View>
   );
 }

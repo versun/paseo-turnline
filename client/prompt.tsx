@@ -71,7 +71,9 @@ export function TurnPrompt({
   const summary = useMemo(() => {
     if (!result) return baseQuery.isError ? "Unavailable" : "Loading…";
     if (result.status === "ok" && result.prompt) {
-      const parts: string[] = [plural(result.prompt.sections.length, "section")];
+      const parts: string[] = [];
+      if (result.provider) parts.push(result.provider);
+      parts.push(plural(result.prompt.sections.length, "section"));
       if (result.prompt.tools?.length) {
         parts.push(plural(result.prompt.tools.length, "tool"));
       }
@@ -85,6 +87,8 @@ export function TurnPrompt({
     if (!prompt?.tools) return [];
     return showAllTools ? prompt.tools : prompt.tools.slice(0, INITIAL_TOOLS_LIMIT);
   }, [prompt?.tools, showAllTools]);
+
+  if (result?.status === "unsupported") return null;
 
   const toggleMessages = () => {
     const next = !showMessages;
@@ -116,6 +120,10 @@ export function TurnPrompt({
         ? (messagesQuery.data.reason ?? "Unable to load context messages.")
         : undefined;
 
+  const metaParts: string[] = [];
+  if (capturedLabel) metaParts.push(`Captured ${capturedLabel}`);
+  if (prompt?.latestOnly && at) metaParts.push("Latest snapshot");
+
   return (
     <View style={{ gap: 4 }}>
       <HoverPressable
@@ -138,24 +146,8 @@ export function TurnPrompt({
         />
         <Icon name="Layers" size={14} color={theme.colors.foregroundMuted} />
         <Text style={{ color: theme.colors.foreground, fontSize: 13, fontWeight: "500" }}>
-          Provider prompt
+          Prompt context
         </Text>
-        {result?.provider && result.status === "ok" && (
-          <View
-            style={{
-              paddingHorizontal: 6,
-              paddingVertical: 1,
-              borderRadius: 999,
-              backgroundColor: tokens.subtlePillBg,
-              borderWidth: tokens.hairline,
-              borderColor: tokens.subtleBorder,
-            }}
-          >
-            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10.5, fontWeight: "600" }}>
-              {result.provider}
-            </Text>
-          </View>
-        )}
         <Text
           style={{ color: theme.colors.foregroundMuted, fontSize: 12, flex: 1 }}
           numberOfLines={1}
@@ -171,20 +163,21 @@ export function TurnPrompt({
             marginRight: 4,
             marginBottom: 6,
             backgroundColor: tokens.codeBg,
-            borderRadius: 10,
+            borderRadius: 8,
             borderWidth: tokens.hairline,
             borderColor: tokens.subtleBorder,
-            padding: 10,
-            gap: 10,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+            gap: 8,
           }}
         >
-          {(prompt.model || capturedLabel || prompt.source || (prompt.latestOnly && at)) && (
+          {(prompt.model || metaParts.length > 0) && (
             <View
               style={{
                 flexDirection: "row",
                 flexWrap: "wrap",
                 alignItems: "center",
-                gap: 8,
+                gap: 6,
                 paddingBottom: 6,
                 borderBottomWidth: tokens.hairline,
                 borderBottomColor: tokens.subtleBorder,
@@ -202,7 +195,7 @@ export function TurnPrompt({
                   {prompt.model}
                 </Text>
               )}
-              {capturedLabel && (
+              {metaParts.length > 0 && (
                 <Text
                   style={{
                     color: theme.colors.foregroundMuted,
@@ -210,17 +203,7 @@ export function TurnPrompt({
                     fontVariant: ["tabular-nums"],
                   }}
                 >
-                  Captured {capturedLabel}
-                </Text>
-              )}
-              {prompt.source && (
-                <Text style={{ color: withAlpha(theme.colors.foregroundMuted, 0.8), fontSize: 11 }}>
-                  {prompt.source.kind}
-                </Text>
-              )}
-              {prompt.latestOnly && at && (
-                <Text style={{ color: withAlpha(theme.colors.foregroundMuted, 0.85), fontSize: 11 }}>
-                  Latest snapshot only
+                  {prompt.model ? `· ${metaParts.join(" · ")}` : metaParts.join(" · ")}
                 </Text>
               )}
             </View>
@@ -231,12 +214,13 @@ export function TurnPrompt({
               No prompt sections recorded before this point.
             </Text>
           ) : (
-            <View style={{ gap: 6 }}>
+            <View>
               {prompt.sections.map((section, index) => (
                 <PromptSection
                   key={`${section.name}:${index}`}
                   name={section.name}
                   text={section.text}
+                  first={index === 0}
                   theme={theme}
                   tokens={tokens}
                 />
@@ -245,29 +229,33 @@ export function TurnPrompt({
           )}
 
           {prompt.tools && prompt.tools.length > 0 && (
-            <View style={{ gap: 6 }}>
+            <View
+              style={{
+                gap: 5,
+                paddingTop: 6,
+                borderTopWidth: tokens.hairline,
+                borderTopColor: tokens.subtleBorder,
+              }}
+            >
               <Text
                 style={{
                   color: theme.colors.foregroundMuted,
                   fontSize: 11,
-                  fontWeight: "600",
-                  letterSpacing: 0.2,
+                  fontWeight: "500",
                 }}
               >
                 {prompt.toolsKind === "observed" ? "Tools called" : "Declared tools"} (
                 {prompt.tools.length})
               </Text>
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 5 }}>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
                 {visibleTools.map((tool) => (
                   <View
                     key={tool}
                     style={{
-                      paddingHorizontal: 7,
-                      paddingVertical: 2.5,
-                      borderRadius: 6,
-                      backgroundColor: theme.colors.surface1,
-                      borderWidth: tokens.hairline,
-                      borderColor: tokens.subtleBorder,
+                      paddingHorizontal: 6,
+                      paddingVertical: 2,
+                      borderRadius: 5,
+                      backgroundColor: tokens.subtlePillBg,
                     }}
                   >
                     <Text
@@ -286,9 +274,9 @@ export function TurnPrompt({
                     onPress={() => setShowAllTools((v) => !v)}
                     accessibilityRole="button"
                     style={({ hovered }) => ({
-                      paddingHorizontal: 7,
-                      paddingVertical: 2.5,
-                      borderRadius: 6,
+                      paddingHorizontal: 6,
+                      paddingVertical: 2,
+                      borderRadius: 5,
                       backgroundColor: hovered ? tokens.accentSoft : "transparent",
                     })}
                   >
@@ -309,7 +297,7 @@ export function TurnPrompt({
                 paddingTop: 6,
                 borderTopWidth: tokens.hairline,
                 borderTopColor: tokens.subtleBorder,
-                gap: 8,
+                gap: 6,
               }}
             >
               <HoverPressable
@@ -319,9 +307,9 @@ export function TurnPrompt({
                   alignSelf: "flex-start",
                   flexDirection: "row",
                   alignItems: "center",
-                  gap: 6,
-                  paddingHorizontal: 8,
-                  paddingVertical: 4,
+                  gap: 5,
+                  paddingHorizontal: 6,
+                  paddingVertical: 3,
                   borderRadius: 6,
                   backgroundColor: pressed
                     ? tokens.rowPressedBg
@@ -337,34 +325,38 @@ export function TurnPrompt({
                 />
                 <Text style={{ color: theme.colors.accent, fontSize: 12, fontWeight: "500" }}>
                   {showMessages
-                    ? `Hide context messages (${prompt.messageCount})`
-                    : `Inspect context messages (${prompt.messageCount})`}
+                    ? `Hide messages (${prompt.messageCount})`
+                    : `Context messages (${prompt.messageCount})`}
                 </Text>
               </HoverPressable>
 
               {showMessages && messagesQuery.isFetching && !prompt.messages && (
-                <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11.5, marginLeft: 8 }}>
-                  Loading context messages…
+                <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11.5, marginLeft: 6 }}>
+                  Loading messages…
                 </Text>
               )}
 
               {showMessages && messagesError && !messagesQuery.isFetching && !prompt.messages && (
-                <Text style={{ color: theme.colors.statusDanger, fontSize: 11.5, marginLeft: 8 }}>
+                <Text style={{ color: theme.colors.statusDanger, fontSize: 11.5, marginLeft: 6 }}>
                   {messagesError}
                 </Text>
               )}
 
-              {showMessages &&
-                prompt.messages?.map((message, index) => (
-                  <ContextMessageRow
-                    key={index}
-                    role={message.role}
-                    content={message.content}
-                    at={message.at}
-                    theme={theme}
-                    tokens={tokens}
-                  />
-                ))}
+              {showMessages && prompt.messages && (
+                <View>
+                  {prompt.messages.map((message, index) => (
+                    <ContextMessageRow
+                      key={index}
+                      role={message.role}
+                      content={message.content}
+                      at={message.at}
+                      first={index === 0}
+                      theme={theme}
+                      tokens={tokens}
+                    />
+                  ))}
+                </View>
+              )}
             </View>
           )}
         </View>
@@ -394,11 +386,13 @@ export function TurnPrompt({
 function PromptSection({
   name,
   text,
+  first,
   theme,
   tokens,
 }: {
   name: string;
   text: string;
+  first: boolean;
   theme: PluginTheme;
   tokens: ThingsTokens;
 }) {
@@ -407,27 +401,31 @@ function PromptSection({
   return (
     <View
       style={{
-        backgroundColor: theme.colors.surface1,
-        borderRadius: 8,
-        borderWidth: tokens.hairline,
-        borderColor: tokens.subtleBorder,
-        overflow: "hidden",
+        borderTopWidth: first ? 0 : tokens.hairline,
+        borderTopColor: tokens.subtleBorder,
       }}
     >
       <View
         style={{
           flexDirection: "row",
           alignItems: "center",
-          paddingLeft: 8,
-          paddingRight: 4,
-          paddingVertical: 5,
-          gap: 6,
+          paddingVertical: 4,
+          gap: 4,
         }}
       >
         <HoverPressable
           onPress={() => setOpen((v) => !v)}
           accessibilityRole="button"
-          style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}
+          style={(state) => ({
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 6,
+            flex: 1,
+            paddingHorizontal: 4,
+            paddingVertical: 3,
+            borderRadius: 5,
+            backgroundColor: pressBg(state, tokens),
+          })}
         >
           <Icon
             name={open ? "ChevronDown" : "ChevronRight"}
@@ -435,7 +433,7 @@ function PromptSection({
             color={theme.colors.foregroundMuted}
           />
           <Text
-            style={{ color: theme.colors.foreground, fontSize: 12, fontWeight: "600", flex: 1 }}
+            style={{ color: theme.colors.foreground, fontSize: 12, fontWeight: "500", flex: 1 }}
             numberOfLines={1}
           >
             {name}
@@ -454,15 +452,7 @@ function PromptSection({
       </View>
 
       {open && (
-        <View
-          style={{
-            borderTopWidth: tokens.hairline,
-            borderTopColor: tokens.subtleBorder,
-            paddingHorizontal: 10,
-            paddingVertical: 8,
-            gap: 4,
-          }}
-        >
+        <View style={{ paddingLeft: 20, paddingRight: 4, paddingBottom: 8, gap: 4 }}>
           <TruncatedText
             text={text}
             lineLimit={SECTION_LINE_LIMIT}
@@ -485,12 +475,14 @@ function ContextMessageRow({
   role,
   content,
   at,
+  first,
   theme,
   tokens,
 }: {
   role: string;
   content: string;
   at?: string;
+  first: boolean;
   theme: PluginTheme;
   tokens: ThingsTokens;
 }) {
@@ -506,12 +498,6 @@ function ContextMessageRow({
 
   const atLabel = formatClock(at);
   const roleLower = role.toLowerCase();
-  const roleBg =
-    roleLower === "system"
-      ? tokens.accentSoft
-      : roleLower === "assistant"
-        ? tokens.successSoft
-        : tokens.subtlePillBg;
   const roleFg =
     roleLower === "system"
       ? theme.colors.accent
@@ -522,40 +508,28 @@ function ContextMessageRow({
   return (
     <View
       style={{
-        backgroundColor: theme.colors.surface1,
-        borderRadius: 8,
-        borderWidth: tokens.hairline,
-        borderColor: tokens.subtleBorder,
-        paddingHorizontal: 9,
+        borderTopWidth: first ? 0 : tokens.hairline,
+        borderTopColor: tokens.subtleBorder,
         paddingVertical: 7,
-        gap: 5,
+        gap: 4,
       }}
     >
       <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-        <View
+        <Text
           style={{
-            paddingHorizontal: 6,
-            paddingVertical: 1.5,
-            borderRadius: 4,
-            backgroundColor: roleBg,
+            color: roleFg,
+            fontSize: 10.5,
+            fontWeight: "600",
+            textTransform: "uppercase",
+            letterSpacing: 0.4,
           }}
         >
-          <Text
-            style={{
-              color: roleFg,
-              fontSize: 10,
-              fontWeight: "700",
-              textTransform: "uppercase",
-              letterSpacing: 0.4,
-            }}
-          >
-            {role}
-          </Text>
-        </View>
+          {role}
+        </Text>
         {atLabel ? (
           <Text
             style={{
-              color: theme.colors.foregroundMuted,
+              color: withAlpha(theme.colors.foregroundMuted, 0.78),
               fontSize: 10.5,
               fontVariant: ["tabular-nums"],
             }}
