@@ -9,6 +9,7 @@ import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin
 import contributeClient from "../index.client";
 import contributeServer from "../index.server";
 import { getAgentPromptHandler } from "../server/prompt";
+import { resolveProviderChannel, type ResolvedAgent } from "../server/resolve-agent";
 import { getAgentUsageHandler } from "../server/usage";
 import { getAgentPrompt } from "../shared/prompt";
 import { getAgentUsage } from "../shared/usage";
@@ -143,12 +144,226 @@ describe("getAgentPromptHandler", () => {
     const out = await getAgentPromptHandler(
       { agentId: "a3" },
       mockHandlerContext({
-        refreshed: { id: "a3", provider: "claude", cwd: dir },
+        refreshed: { id: "a3", provider: "opencode", cwd: dir },
       }),
     );
     assert.equal(out.status, "unsupported");
-    assert.equal(out.provider, "claude");
+    assert.equal(out.provider, "opencode");
     assert.ok(getAgentPrompt.output.safeParse(out).success);
+  });
+
+  it("handles claude, codex, missing session files, and custom providers extending built-ins", async () => {
+    const claudeMissing = await getAgentPromptHandler(
+      { agentId: "cl-missing" },
+      mockHandlerContext({
+        refreshed: { id: "cl-missing", provider: "claude", cwd: dir },
+      }),
+    );
+    assert.equal(claudeMissing.status, "unavailable");
+    assert.match(claudeMissing.reason ?? "", /claude session file not found/);
+    assert.ok(getAgentPrompt.output.safeParse(claudeMissing).success);
+
+    const claudeFile = join(dir, "claude-handler-prompt.jsonl");
+    await writeFile(
+      claudeFile,
+      [
+        JSON.stringify({
+          type: "api-request-shape",
+          shapeHash: "h1",
+          timestamp: "2026-01-01T10:00:00Z",
+          shape: {
+            system: [{ type: "text", text: "You are Claude Code." }],
+            tools: [{ name: "Read" }],
+          },
+        }),
+        JSON.stringify({
+          type: "api-request",
+          timestamp: "2026-01-01T10:00:00Z",
+          shapeHash: "h1",
+          params: { model: "claude-opus-4-6" },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    const claudeOk = await getAgentPromptHandler(
+      { agentId: "cl-ok" },
+      mockHandlerContext({
+        refreshed: {
+          id: "cl-ok",
+          provider: "claude-work",
+          cwd: dir,
+          persistence: { provider: "claude", sessionId: "s-cl", nativeHandle: claudeFile },
+        },
+      }),
+    );
+    assert.equal(claudeOk.status, "ok");
+    assert.equal(claudeOk.provider, "claude-work");
+    assert.equal(claudeOk.prompt?.model, "claude-opus-4-6");
+    assert.equal(claudeOk.prompt?.source?.kind, "claude-session");
+    assert.deepEqual(claudeOk.prompt?.tools, ["Read"]);
+    assert.ok(getAgentPrompt.output.safeParse(claudeOk).success);
+
+    const codexMissing = await getAgentPromptHandler(
+      { agentId: "cx-missing" },
+      mockHandlerContext({
+        refreshed: { id: "cx-missing", provider: "codex", cwd: dir },
+      }),
+    );
+    assert.equal(codexMissing.status, "unavailable");
+    assert.match(codexMissing.reason ?? "", /codex session file not found/);
+    assert.ok(getAgentPrompt.output.safeParse(codexMissing).success);
+
+    const codexHome = join(dir, "codex-prompt-home");
+    const rolloutDir = join(codexHome, "sessions", "2026", "11", "23");
+    await mkdir(rolloutDir, { recursive: true });
+    const rolloutFile = join(rolloutDir, "rollout-2026-11-23T10-00-00-cx-thread-1.jsonl");
+    await writeFile(
+      rolloutFile,
+      [
+        JSON.stringify({
+          timestamp: "2026-11-23T10:00:00Z",
+          type: "session_meta",
+          payload: { id: "cx-thread-1", base_instructions: { text: "Base Codex prompt" } },
+        }),
+        JSON.stringify({
+          timestamp: "2026-11-23T10:00:01Z",
+          type: "turn_context",
+          payload: { model: "gpt-5.4", developer_instructions: "Dev rules" },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    const prevCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    try {
+      const codexOk = await getAgentPromptHandler(
+        { agentId: "cx-ok" },
+        mockHandlerContext({
+          refreshed: {
+            id: "cx-ok",
+            provider: "codex-work",
+            cwd: dir,
+            persistence: {
+              provider: "codex",
+              sessionId: "cx-thread-1",
+              nativeHandle: "cx-thread-1",
+            },
+          },
+        }),
+      );
+      assert.equal(codexOk.status, "ok");
+      assert.equal(codexOk.provider, "codex-work");
+      assert.equal(codexOk.prompt?.model, "gpt-5.4");
+      assert.equal(codexOk.prompt?.source?.kind, "codex-session");
+      assert.deepEqual(
+        codexOk.prompt?.sections.map((s) => s.name),
+        ["base_instructions", "developer_instructions"],
+      );
+      assert.ok(getAgentPrompt.output.safeParse(codexOk).success);
+    } finally {
+      if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prevCodexHome;
+    }
+  });
+
+  it("rejects Claude and Codex sessionId traversal/absolute paths and catches invalid `at` timestamps", async () => {
+    const secretFile = join(dir, "prompt-secret.jsonl");
+    await writeFile(secretFile, "{}", "utf8");
+
+    // Claude: traversal and absolute-path sessionId with unset nativeHandle must be rejected
+    const claudeTraversal = await getAgentPromptHandler(
+      { agentId: "cl-p-trav" },
+      mockHandlerContext({
+        refreshed: {
+          id: "cl-p-trav",
+          provider: "claude",
+          cwd: dir,
+          persistence: { provider: "claude", sessionId: "../prompt-secret.jsonl" },
+        },
+      }),
+    );
+    assert.equal(claudeTraversal.status, "unavailable");
+    assert.match(claudeTraversal.reason ?? "", /claude session file not found/);
+    assert.ok(getAgentPrompt.output.safeParse(claudeTraversal).success);
+
+    const claudeAbs = await getAgentPromptHandler(
+      { agentId: "cl-p-abs" },
+      mockHandlerContext({
+        refreshed: {
+          id: "cl-p-abs",
+          provider: "claude",
+          cwd: dir,
+          persistence: { provider: "claude", sessionId: secretFile },
+        },
+      }),
+    );
+    assert.equal(claudeAbs.status, "unavailable");
+    assert.ok(getAgentPrompt.output.safeParse(claudeAbs).success);
+
+    // Codex: traversal and absolute-path sessionId with unset nativeHandle must be rejected
+    const codexTraversal = await getAgentPromptHandler(
+      { agentId: "cx-p-trav" },
+      mockHandlerContext({
+        refreshed: {
+          id: "cx-p-trav",
+          provider: "codex",
+          cwd: dir,
+          persistence: { provider: "codex", sessionId: "../prompt-secret.jsonl" },
+        },
+      }),
+    );
+    assert.equal(codexTraversal.status, "unavailable");
+    assert.match(codexTraversal.reason ?? "", /codex session file not found/);
+    assert.ok(getAgentPrompt.output.safeParse(codexTraversal).success);
+
+    const codexAbs = await getAgentPromptHandler(
+      { agentId: "cx-p-abs" },
+      mockHandlerContext({
+        refreshed: {
+          id: "cx-p-abs",
+          provider: "codex",
+          cwd: dir,
+          persistence: { provider: "codex", sessionId: secretFile },
+        },
+      }),
+    );
+    assert.equal(codexAbs.status, "unavailable");
+    assert.ok(getAgentPrompt.output.safeParse(codexAbs).success);
+
+    // Invalid `at` timestamps hit the handler catch branch for both Claude and Codex
+    const claudeInvalidAt = await getAgentPromptHandler(
+      { agentId: "cl-p-bad-at", at: "not-a-date" },
+      mockHandlerContext({
+        refreshed: {
+          id: "cl-p-bad-at",
+          provider: "claude",
+          cwd: dir,
+          persistence: { provider: "claude", nativeHandle: secretFile },
+        },
+      }),
+    );
+    assert.equal(claudeInvalidAt.status, "unavailable");
+    assert.equal(claudeInvalidAt.provider, "claude");
+    assert.match(claudeInvalidAt.reason ?? "", /invalid timestamp/);
+    assert.ok(getAgentPrompt.output.safeParse(claudeInvalidAt).success);
+
+    const codexInvalidAt = await getAgentPromptHandler(
+      { agentId: "cx-p-bad-at", at: "not-a-date" },
+      mockHandlerContext({
+        refreshed: {
+          id: "cx-p-bad-at",
+          provider: "codex",
+          cwd: dir,
+          persistence: { provider: "codex", nativeHandle: secretFile },
+        },
+      }),
+    );
+    assert.equal(codexInvalidAt.status, "unavailable");
+    assert.equal(codexInvalidAt.provider, "codex");
+    assert.match(codexInvalidAt.reason ?? "", /invalid timestamp/);
+    assert.ok(getAgentPrompt.output.safeParse(codexInvalidAt).success);
   });
 
   it("handles antigravity missing id, missing db, and valid conversation db", async () => {
@@ -243,14 +458,14 @@ describe("getAgentUsageHandler", () => {
     assert.ok(getAgentUsage.output.safeParse(missing).success);
 
     const unsupported = await getAgentUsageHandler(
-      { agentId: "codex-1" },
-      mockHandlerContext({ refreshed: { id: "codex-1", provider: "codex", cwd: dir } }),
+      { agentId: "opencode-1" },
+      mockHandlerContext({ refreshed: { id: "opencode-1", provider: "opencode", cwd: dir } }),
     );
     assert.equal(unsupported.status, "unsupported");
     assert.ok(getAgentUsage.output.safeParse(unsupported).success);
   });
 
-  it("reads pi and claude session usage records and validates against output schema", async () => {
+  it("reads pi, claude, and codex session usage records (including custom profiles) and validates against output schema", async () => {
     const piFile = join(dir, "pi-usage.jsonl");
     await writeFile(
       piFile,
@@ -316,6 +531,73 @@ describe("getAgentUsageHandler", () => {
     assert.equal(claudeRes.records?.[0].usage.inputTokens, 1000);
     assert.equal(claudeRes.records?.[0].usage.cachedInputTokens, 900);
     assert.ok(getAgentUsage.output.safeParse(claudeRes).success);
+
+    const codexMissing = await getAgentUsageHandler(
+      { agentId: "cx-missing" },
+      mockHandlerContext({
+        refreshed: { id: "cx-missing", provider: "codex", cwd: dir },
+      }),
+    );
+    assert.equal(codexMissing.status, "unavailable");
+    assert.match(codexMissing.reason ?? "", /codex session file not found/);
+    assert.ok(getAgentUsage.output.safeParse(codexMissing).success);
+
+    const codexFile = join(dir, "codex-usage-handler.jsonl");
+    await writeFile(
+      codexFile,
+      [
+        JSON.stringify({
+          timestamp: "2026-11-23T10:00:01Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            id: "msg_cx_1",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Done." }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-11-23T10:00:02Z",
+          type: "event_msg",
+          payload: {
+            type: "token_count",
+            info: {
+              last_token_usage: {
+                input_tokens: 4000,
+                cached_input_tokens: 3200,
+                output_tokens: 80,
+              },
+              total_token_usage: {
+                input_tokens: 4000,
+                cached_input_tokens: 3200,
+                output_tokens: 80,
+              },
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    const codexRes = await getAgentUsageHandler(
+      { agentId: "cx-1" },
+      mockHandlerContext({
+        refreshed: {
+          id: "cx-1",
+          provider: "codex-custom",
+          cwd: dir,
+          persistence: { provider: "codex", nativeHandle: codexFile },
+        },
+      }),
+    );
+    assert.equal(codexRes.status, "ok");
+    assert.equal(codexRes.provider, "codex-custom");
+    assert.equal(codexRes.records?.length, 1);
+    assert.equal(codexRes.records?.[0].messageId, "msg_cx_1");
+    assert.equal(codexRes.records?.[0].usage.inputTokens, 4000);
+    assert.equal(codexRes.records?.[0].usage.cachedInputTokens, 3200);
+    assert.equal(codexRes.records?.[0].usage.outputTokens, 80);
+    assert.ok(getAgentUsage.output.safeParse(codexRes).success);
   });
 
   it("handles devin, antigravity, missing files, Claude sessionId traversal rejection, and error catch branch", async () => {
@@ -507,6 +789,92 @@ describe("getAgentUsageHandler", () => {
       if (prevHome === undefined) delete process.env.HOME;
       else process.env.HOME = prevHome;
     }
+  });
+});
+
+describe("resolveProviderChannel", () => {
+  const asAgent = (agent: Record<string, unknown>): ResolvedAgent =>
+    agent as unknown as ResolvedAgent;
+
+  it("follows precedence: agent.provider > persistence.provider > runtimeInfo.provider > persistence.metadata.provider", () => {
+    // Built-in agent.provider wins over conflicting hints
+    assert.equal(
+      resolveProviderChannel(
+        asAgent({
+          provider: "claude",
+          persistence: { provider: "codex", metadata: { provider: "pi" } },
+          runtimeInfo: { provider: "devin" },
+        }),
+      ),
+      "claude",
+    );
+
+    // Custom agent.provider falls back to built-in persistence.provider
+    assert.equal(
+      resolveProviderChannel(
+        asAgent({
+          provider: "my-claude-profile",
+          persistence: { provider: "claude", metadata: { provider: "codex" } },
+          runtimeInfo: { provider: "pi" },
+        }),
+      ),
+      "claude",
+    );
+
+    // Custom persistence.provider falls through to built-in runtimeInfo.provider
+    assert.equal(
+      resolveProviderChannel(
+        asAgent({
+          provider: "my-codex-profile",
+          persistence: { provider: "custom-store", metadata: { provider: "claude" } },
+          runtimeInfo: { provider: "codex" },
+        }),
+      ),
+      "codex",
+    );
+
+    // Custom runtimeInfo.provider falls through to built-in persistence.metadata.provider
+    assert.equal(
+      resolveProviderChannel(
+        asAgent({
+          provider: "my-custom-profile",
+          persistence: { provider: "custom-store", metadata: { provider: "claude" } },
+          runtimeInfo: { provider: "custom-runtime" },
+        }),
+      ),
+      "claude",
+    );
+  });
+
+  it("ignores malformed metadata and returns primary provider when no built-in channel matches", () => {
+    assert.equal(
+      resolveProviderChannel(
+        asAgent({
+          provider: "opencode",
+          persistence: { provider: "opencode", metadata: ["claude"] },
+        }),
+      ),
+      "opencode",
+    );
+    assert.equal(
+      resolveProviderChannel(
+        asAgent({
+          provider: "opencode",
+          persistence: { metadata: "claude" },
+        }),
+      ),
+      "opencode",
+    );
+    assert.equal(
+      resolveProviderChannel(
+        asAgent({
+          provider: "opencode",
+          persistence: { metadata: { provider: 123 } },
+        }),
+      ),
+      "opencode",
+    );
+    assert.equal(resolveProviderChannel(asAgent({})), "unknown");
   });
 });
 

@@ -7,9 +7,11 @@ import {
   readAntigravityPrompt,
   resolveAntigravityConversationId,
 } from "./providers/antigravity";
+import { readClaudePrompt, resolveClaudeSessionFile } from "./providers/claude";
+import { readCodexPrompt, resolveCodexSessionFile } from "./providers/codex";
 import { readDevinPrompt } from "./providers/devin";
 import { readPiPrompt, resolvePiSessionFile } from "./providers/pi";
-import { resolveAgent } from "./resolve-agent";
+import { resolveAgent, resolveProviderChannel } from "./resolve-agent";
 
 type Input = RpcInput<typeof getAgentPrompt>;
 type Output = RpcOutput<typeof getAgentPrompt>;
@@ -23,11 +25,13 @@ export async function getAgentPromptHandler(
     return { provider: "unknown", status: "unavailable", reason: "agent not found" };
   }
   const provider = agent.provider ?? "unknown";
+  const channel = resolveProviderChannel(agent);
   const sessionId = agent.persistence?.sessionId || agent.runtimeInfo?.sessionId || undefined;
-  const nativeHandle = agent.persistence?.nativeHandle || sessionId;
+  const rawNativeHandle = agent.persistence?.nativeHandle || undefined;
+  const nativeHandle = rawNativeHandle || sessionId;
 
   try {
-    switch (provider) {
+    switch (channel) {
       case "pi": {
         const file = await resolvePiSessionFile(nativeHandle, sessionId, agent.cwd);
         if (!file || !existsSync(file)) {
@@ -88,6 +92,48 @@ export async function getAgentPromptHandler(
           status: "ok",
           prompt: await readAntigravityPrompt({
             dbPath: db,
+            at: input.at,
+            includeMessages: input.includeMessages,
+          }),
+        };
+      }
+      case "claude": {
+        const file = await resolveClaudeSessionFile(rawNativeHandle, sessionId, agent.cwd);
+        if (!file || !existsSync(file)) {
+          return {
+            provider,
+            status: "unavailable",
+            reason: "claude session file not found",
+          };
+        }
+        return {
+          provider,
+          status: "ok",
+          prompt: await readClaudePrompt({
+            sessionFile: file,
+            at: input.at,
+            includeMessages: input.includeMessages,
+          }),
+        };
+      }
+      case "codex": {
+        const file = await resolveCodexSessionFile(
+          rawNativeHandle,
+          sessionId,
+          agent.persistence?.metadata,
+        );
+        if (!file || !existsSync(file)) {
+          return {
+            provider,
+            status: "unavailable",
+            reason: "codex session file not found",
+          };
+        }
+        return {
+          provider,
+          status: "ok",
+          prompt: await readCodexPrompt({
+            sessionFile: file,
             at: input.at,
             includeMessages: input.includeMessages,
           }),

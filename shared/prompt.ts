@@ -19,7 +19,7 @@ export const providerPromptSchema = z.object({
   model: z.string().optional(),
   /** Named prompt parts in the order the provider applies them. */
   sections: z.array(promptSectionSchema),
-  /** Tool names associated with this snapshot (declared for pi; observed calls when declarations are unavailable). */
+  /** Tool names associated with this snapshot (declared for pi/claude; observed calls when declarations are unavailable). */
   tools: z.array(z.string()).optional(),
   /** Whether `tools` are declared tool definitions or only tools observed in messages. */
   toolsKind: z.enum(["declared", "observed"]).optional(),
@@ -31,7 +31,7 @@ export const providerPromptSchema = z.object({
   messageCount: z.number().optional(),
   source: z
     .object({
-      kind: z.enum(["pi-session", "devin-db", "antigravity-db"]),
+      kind: z.enum(["pi-session", "devin-db", "antigravity-db", "claude-session", "codex-session"]),
       path: z.string().optional(),
     })
     .optional(),

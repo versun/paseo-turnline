@@ -17,7 +17,7 @@ const itemUsageSchema = z.object({
 const usageRecordSchema = z.object({
   /** ISO timestamp of the LLM response/step. */
   at: z.string().optional(),
-  /** Provider message identifier (Pi id/responseId, Devin message_id, Antigravity bot-... id, Claude message.id). */
+  /** Provider message identifier (Pi id/responseId, Devin message_id, Antigravity bot-... id, Claude message.id, Codex item id). */
   messageId: z.string().optional(),
   /** Tool call IDs emitted by this LLM call. */
   callIds: z.array(z.string()).optional(),

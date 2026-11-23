@@ -8,9 +8,10 @@ import {
   resolveAntigravityConversationId,
 } from "./providers/antigravity";
 import { readClaudeUsage, resolveClaudeSessionFile } from "./providers/claude";
+import { readCodexUsage, resolveCodexSessionFile } from "./providers/codex";
 import { readDevinUsage } from "./providers/devin";
 import { readPiUsage, resolvePiSessionFile } from "./providers/pi";
-import { resolveAgent } from "./resolve-agent";
+import { resolveAgent, resolveProviderChannel } from "./resolve-agent";
 
 type Input = RpcInput<typeof getAgentUsage>;
 type Output = RpcOutput<typeof getAgentUsage>;
@@ -24,11 +25,12 @@ export async function getAgentUsageHandler(
     return { provider: "unknown", status: "unavailable", reason: "agent not found" };
   }
   const provider = agent.provider ?? "unknown";
+  const channel = resolveProviderChannel(agent);
   const sessionId = agent.persistence?.sessionId || agent.runtimeInfo?.sessionId || undefined;
   const nativeHandle = agent.persistence?.nativeHandle || undefined;
 
   try {
-    switch (provider) {
+    switch (channel) {
       case "pi": {
         const file = await resolvePiSessionFile(nativeHandle, sessionId, agent.cwd);
         if (!file || !existsSync(file)) {
@@ -95,6 +97,25 @@ export async function getAgentUsageHandler(
           provider,
           status: "ok",
           records: await readClaudeUsage(file),
+        };
+      }
+      case "codex": {
+        const file = await resolveCodexSessionFile(
+          nativeHandle,
+          sessionId,
+          agent.persistence?.metadata,
+        );
+        if (!file || !existsSync(file)) {
+          return {
+            provider,
+            status: "unavailable",
+            reason: "codex session file not found",
+          };
+        }
+        return {
+          provider,
+          status: "ok",
+          records: await readCodexUsage(file),
         };
       }
       default:
