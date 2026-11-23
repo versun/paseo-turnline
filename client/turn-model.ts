@@ -64,12 +64,6 @@ export interface ResolvedTurnUsage {
   itemUsages: Map<number, ItemUsageDisplay>;
 }
 
-export interface DayGroup {
-  id: string;
-  label: string;
-  turns: Turn[];
-}
-
 export function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : pluralForm}`;
 }
@@ -254,20 +248,6 @@ export function filterTurns(
   });
 }
 
-export function groupTurnsByDay(turns: readonly Turn[], now = new Date()): DayGroup[] {
-  const groups: DayGroup[] = [];
-  for (const turn of turns) {
-    const day = formatDayHeading(turn.startedAt, now);
-    const last = groups[groups.length - 1];
-    if (!last || last.id !== day.id) {
-      groups.push({ id: day.id, label: day.label, turns: [turn] });
-    } else {
-      last.turns.push(turn);
-    }
-  }
-  return groups;
-}
-
 export function turnDurationMs(turn: Turn): number | null {
   if (!turn.startedAt || !turn.endedAt || turn.startedAt === turn.endedAt) return null;
   const ms = Date.parse(turn.endedAt) - Date.parse(turn.startedAt);
@@ -287,53 +267,18 @@ export function formatDuration(ms: number): string {
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-function parseDate(iso: string | undefined): Date | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function formatHM(d: Date): string {
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-export function formatTimeOnly(iso: string | undefined): string {
-  const d = parseDate(iso);
-  return d ? formatHM(d) : "";
-}
 
 export function formatClock(iso: string | undefined, now = new Date()): string {
-  const d = parseDate(iso);
-  if (!d) return "";
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
   const sameDay =
     d.getFullYear() === now.getFullYear() &&
     d.getMonth() === now.getMonth() &&
     d.getDate() === now.getDate();
-  const time = formatHM(d);
+  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   if (sameDay) return time;
   return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${time}`;
-}
-
-export function formatDayHeading(
-  iso: string | undefined,
-  now = new Date(),
-): { id: string; label: string } {
-  const d = parseDate(iso);
-  if (!d) return { id: "earlier", label: "Earlier" };
-
-  const todayUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
-  const targetUtc = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
-  const diffDays = (todayUtc - targetUtc) / 86_400_000;
-  const id = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-
-  if (diffDays === 0) return { id, label: "Today" };
-  if (diffDays === 1) return { id, label: "Yesterday" };
-  if (d.getFullYear() === now.getFullYear()) {
-    return { id, label: `${WEEKDAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}` };
-  }
-  return { id, label: `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}` };
 }
 
 export function formatTokens(n: number | undefined): string {

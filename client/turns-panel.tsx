@@ -15,7 +15,6 @@ import {
   CopyButton,
   HoverPressable,
   pressBg,
-  SectionHeading,
   StatusGlyph,
   statusTone,
   TagPill,
@@ -30,9 +29,7 @@ import {
   formatClock,
   formatCost,
   formatDuration,
-  formatTimeOnly,
   formatTokens,
-  groupTurnsByDay,
   plural,
   sortTurns,
   stepKeyForEntry,
@@ -327,7 +324,7 @@ function TurnRowCard({
     );
   }
 
-  const timeLabel = formatTimeOnly(turn.startedAt);
+  const timeLabel = formatClock(turn.startedAt);
   const metaItems: ReactNode[] = [
     buildStatusMetaItem(turn, theme, tokens),
     showCollapsedAgentTag && agentTitle ? (
@@ -699,10 +696,6 @@ function ExpandedTurnCard({
   );
 }
 
-type ListRow =
-  | { type: "section"; id: string; label: string; count: number; first: boolean }
-  | { type: "turn"; id: string; turn: Turn };
-
 export function TurnsPanel({
   theme,
   layout,
@@ -849,24 +842,6 @@ export function TurnsPanel({
     () => filterTurns(allTurns, { statusFilter, searchQuery, titleById }),
     [allTurns, statusFilter, searchQuery, titleById],
   );
-
-  const listRows = useMemo<ListRow[]>(() => {
-    const groups = groupTurnsByDay(filteredTurns);
-    const rows: ListRow[] = [];
-    groups.forEach((group, index) => {
-      rows.push({
-        type: "section",
-        id: `section:${group.id}`,
-        label: group.label,
-        count: group.turns.length,
-        first: index === 0,
-      });
-      for (const turn of group.turns) {
-        rows.push({ type: "turn", id: turn.key, turn });
-      }
-    });
-    return rows;
-  }, [filteredTurns]);
 
   const feedStatus = useMemo(() => {
     const errors = new Set<string>();
@@ -1225,7 +1200,7 @@ export function TurnsPanel({
         </View>
 
         {/* Main Content */}
-        {listRows.length === 0 ? (
+        {filteredTurns.length === 0 ? (
           agentsLoading || feedStatus.anyLoading ? (
             <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingBottom: 60 }}>
               <Loading />
@@ -1297,42 +1272,28 @@ export function TurnsPanel({
           )
         ) : (
           <FlatList
-            data={listRows}
-            keyExtractor={(row) => row.id}
+            data={filteredTurns}
+            keyExtractor={(turn) => turn.key}
             contentContainerStyle={{ paddingBottom: 32 }}
             showsVerticalScrollIndicator={false}
-            renderItem={({ item }) => {
-              if (item.type === "section") {
-                return (
-                  <SectionHeading
-                    label={item.label}
-                    count={item.count}
-                    first={item.first}
-                    theme={theme}
-                    tokens={tokens}
-                  />
-                );
-              }
-              const turn = item.turn;
-              return (
-                <TurnRowCard
-                  turn={turn}
-                  itemUsages={itemUsagesByTurnKey.get(turn.key)}
-                  agentTitle={titleById.get(turn.agentId)}
-                  showCollapsedAgentTag={selectedAgentId === "all" && agents.length > 1}
-                  theme={theme}
-                  tokens={tokens}
-                  compact={layout.compact}
-                  expanded={expandedKeys.has(turn.key)}
-                  onToggle={() => toggleTurn(turn.key)}
-                  onOpenAgent={
-                    navigation?.openAgent
-                      ? () => navigation.openAgent({ agentId: turn.agentId })
-                      : undefined
-                  }
-                />
-              );
-            }}
+            renderItem={({ item: turn }) => (
+              <TurnRowCard
+                turn={turn}
+                itemUsages={itemUsagesByTurnKey.get(turn.key)}
+                agentTitle={titleById.get(turn.agentId)}
+                showCollapsedAgentTag={selectedAgentId === "all" && agents.length > 1}
+                theme={theme}
+                tokens={tokens}
+                compact={layout.compact}
+                expanded={expandedKeys.has(turn.key)}
+                onToggle={() => toggleTurn(turn.key)}
+                onOpenAgent={
+                  navigation?.openAgent
+                    ? () => navigation.openAgent({ agentId: turn.agentId })
+                    : undefined
+                }
+              />
+            )}
             ListHeaderComponent={state.sort === "oldest" && hasOlder ? loadOlderRow : null}
             ListFooterComponent={state.sort === "newest" && hasOlder ? loadOlderRow : null}
           />

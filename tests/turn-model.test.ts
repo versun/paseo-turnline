@@ -9,14 +9,11 @@ import {
   formatCacheRate,
   formatClock,
   formatCost,
-  formatDayHeading,
   formatDuration,
   formatItemUsageDetail,
-  formatTimeOnly,
   formatTokens,
   formatToolError,
   groupTurns,
-  groupTurnsByDay,
   itemIdentity,
   mergeUsage,
   normalizeInlineText,
@@ -194,7 +191,7 @@ describe("groupTurns", () => {
   });
 });
 
-describe("sorting, counting, filtering, and day grouping", () => {
+describe("sorting, counting, and filtering", () => {
   it("sorts timestamps numerically across timezones and fractional seconds", () => {
     const mkTurn = (key: string, startedAt?: string, firstSeq = 1): Turn => ({
       key,
@@ -323,27 +320,6 @@ describe("sorting, counting, filtering, and day grouping", () => {
     assert.equal(turnMatchesQuery(t1, "config.json"), true);
     assert.equal(turnMatchesQuery(t1, "nonexistent"), false);
   });
-
-  it("groups turns by day heading", () => {
-    const now = new Date(2026, 5, 15, 12, 0, 0);
-    const todayIso = new Date(2026, 5, 15, 9, 0, 0).toISOString();
-    const yesterdayIso = new Date(2026, 5, 14, 18, 0, 0).toISOString();
-    const turns: Turn[] = [
-      { key: "1", agentId: "a", kind: "turn", status: "completed", startedAt: todayIso, firstSeq: 1, items: [] },
-      { key: "2", agentId: "a", kind: "turn", status: "completed", startedAt: todayIso, firstSeq: 2, items: [] },
-      { key: "3", agentId: "a", kind: "turn", status: "completed", startedAt: yesterdayIso, firstSeq: 3, items: [] },
-      { key: "4", agentId: "a", kind: "turn", status: "open", firstSeq: 4, items: [] },
-    ];
-    const groups = groupTurnsByDay(turns, now);
-    assert.deepEqual(
-      groups.map((g) => ({ label: g.label, count: g.turns.length })),
-      [
-        { label: "Today", count: 2 },
-        { label: "Yesterday", count: 1 },
-        { label: "Earlier", count: 1 },
-      ],
-    );
-  });
 });
 
 describe("formatting and summarization", () => {
@@ -376,17 +352,15 @@ describe("formatting and summarization", () => {
     assert.equal(turnDurationMs({ ...base, endedAt: "2025-12-31T23:59:59Z" }), null);
   });
 
-  it("formats clock, time only, day headings, tokens, and cost", () => {
+  it("formats clock, tokens, and cost", () => {
     const now = new Date(2026, 5, 15, 14, 30, 0);
     const sameDay = new Date(2026, 5, 15, 9, 5, 0).toISOString();
     const earlierYear = new Date(2025, 0, 2, 8, 7, 0).toISOString();
 
-    assert.equal(formatTimeOnly(sameDay), "09:05");
-    assert.equal(formatTimeOnly("bad"), "");
+    assert.equal(formatClock(undefined, now), "");
+    assert.equal(formatClock("bad", now), "");
     assert.equal(formatClock(sameDay, now), "09:05");
     assert.equal(formatClock(earlierYear, now), "Jan 2, 08:07");
-    assert.equal(formatDayHeading(sameDay, now).label, "Today");
-    assert.equal(formatDayHeading(earlierYear, now).label, "Jan 2, 2025");
 
     assert.equal(formatTokens(undefined), "—");
     assert.equal(formatTokens(Number.NaN), "—");

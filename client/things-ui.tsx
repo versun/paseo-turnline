@@ -304,60 +304,6 @@ export function TagPill({
 }
 
 /**
- * Things 3 Logbook-style date section heading with a delicate hairline rule.
- */
-export function SectionHeading({
-  label,
-  count,
-  first,
-  theme,
-  tokens,
-}: {
-  label: string;
-  count: number;
-  first?: boolean;
-  theme: PluginTheme;
-  tokens: ThingsTokens;
-}) {
-  return (
-    <View
-      style={{
-        flexDirection: "row",
-        alignItems: "baseline",
-        justifyContent: "space-between",
-        paddingTop: first ? 4 : 18,
-        paddingBottom: 5,
-        paddingHorizontal: 8,
-        marginBottom: 4,
-        borderBottomWidth: tokens.hairline,
-        borderBottomColor: tokens.subtleBorder,
-      }}
-    >
-      <Text
-        style={{
-          color: theme.colors.foreground,
-          fontSize: 12.5,
-          fontWeight: "600",
-          letterSpacing: -0.1,
-        }}
-      >
-        {label}
-      </Text>
-      <Text
-        style={{
-          color: withAlpha(theme.colors.foregroundMuted, 0.72),
-          fontSize: 11,
-          fontWeight: "500",
-          fontVariant: ["tabular-nums"],
-        }}
-      >
-        {count}
-      </Text>
-    </View>
-  );
-}
-
-/**
  * Quiet copy icon/pill button with inline confirmation tick and toast feedback.
  */
 export function CopyButton({
