@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="64" y1="32" x2="448" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1D2026" />
+      <stop offset="100%" stop-color="#0E1014" />
+    </linearGradient>
+    <radialGradient id="dotGlow" cx="356" cy="158" r="136" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4F8BFF" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#4F8BFF" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="dotFill" x1="336" y1="138" x2="376" y2="178" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6AA5FF" />
+      <stop offset="100%" stop-color="#3B7BFF" />
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)" />
+  <rect width="512" height="512" rx="112" fill="url(#dotGlow)" />
+  <rect x="2" y="2" width="508" height="508" rx="110" stroke="#FFFFFF" stroke-opacity="0.09" stroke-width="2" />
+
+  <path
+    d="M 148 158 L 200 158 A 56 56 0 0 1 256 214 L 256 358"
+    stroke="#F4F6FA"
+    stroke-width="42"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <circle cx="356" cy="158" r="40" fill="#4F8BFF" fill-opacity="0.18" />
+  <circle cx="356" cy="158" r="24" fill="url(#dotFill)" />
+</svg>
