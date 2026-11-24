@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { PluginPaseoApi } from "@getpaseo/plugin/client";
-import { TurnFeedStore } from "../client/feed";
+import { TurnFeedStore } from "../../client/feed";
 
 interface MockEntry {
   seqStart: number;

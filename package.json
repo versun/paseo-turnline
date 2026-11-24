@@ -5,19 +5,18 @@
   "files": [
     "paseo-plugin.json",
     "OVERVIEW.md",
-    "OVERVIEW.*.md",
-    "index.client.ts",
     "index.client.tsx",
     "index.server.ts",
-    "index.server.tsx",
     "client/",
     "server/",
     "shared/",
-    "assets/"
+    "assets/icon.png",
+    "assets/turns-panel.jpg",
+    "assets/prompt-context.png"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --import ./tests/loader.mjs --test tests/*.test.ts"
+    "test": "node --import ./tests/loader.mjs --test \"tests/**/*.test.ts\""
   },
   "devDependencies": {
     "@getpaseo/plugin": "0.16.1",

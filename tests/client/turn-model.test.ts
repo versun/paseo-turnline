@@ -26,8 +26,8 @@ import {
   type FeedEntry,
   type Turn,
   type TurnMeta,
-} from "../client/turn-model";
-import type { UsageRecord } from "../shared/usage";
+} from "../../client/turn-model";
+import type { UsageRecord } from "../../shared/usage";
 
 function entry(
   seq: number,

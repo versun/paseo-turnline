@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { describeEntry } from "../client/items";
-import type { FeedEntry } from "../client/turn-model";
+import { describeEntry } from "../../client/items";
+import type { FeedEntry } from "../../client/turn-model";
 
 const mkEntry = (item: FeedEntry["item"]): FeedEntry => ({
   seq: 1,

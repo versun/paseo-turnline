@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { devinDbPath, readDevinPrompt, readDevinUsage } from "../server/providers/devin";
+import { devinDbPath, readDevinPrompt, readDevinUsage } from "../../../server/providers/devin";
 
 let dir: string;
 let dbPath: string;

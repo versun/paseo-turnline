@@ -1,18 +1,20 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
-import contributeClient from "../index.client";
-import contributeServer from "../index.server";
-import { getAgentPromptHandler } from "../server/prompt";
-import { resolveProviderChannel, type ResolvedAgent } from "../server/resolve-agent";
-import { getAgentUsageHandler } from "../server/usage";
-import { getAgentPrompt } from "../shared/prompt";
-import { getAgentUsage } from "../shared/usage";
+import contributeClient from "../../index.client";
+import contributeServer from "../../index.server";
+import { getAgentPromptHandler } from "../../server/prompt";
+import { resolveProviderChannel, type ResolvedAgent } from "../../server/resolve-agent";
+import { getAgentUsageHandler } from "../../server/usage";
+import { getAgentPrompt } from "../../shared/prompt";
+import { getAgentUsage } from "../../shared/usage";
 
 let dir: string;
 
@@ -929,5 +931,28 @@ describe("plugin entrypoints", () => {
     cleanup();
     assert.equal(panelRemoved, true);
     assert.equal(commandRemoved, true);
+  });
+
+  it("packages manifest icon, media assets, and OVERVIEW.md", async () => {
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+    const manifest = JSON.parse(await readFile(join(repoRoot, "paseo-plugin.json"), "utf8"));
+    const pkg = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8"));
+    const packagedFiles: string[] = pkg.files ?? [];
+    const isPackaged = (relPath: string) =>
+      packagedFiles.some((entry) =>
+        entry.endsWith("/") ? relPath.startsWith(entry) : entry === relPath,
+      );
+
+    assert.ok(existsSync(join(repoRoot, "OVERVIEW.md")), "OVERVIEW.md must exist");
+    assert.ok(isPackaged("OVERVIEW.md"), "package.json#files must include OVERVIEW.md");
+
+    const assetPaths = [manifest.icon, ...(manifest.media ?? [])].filter(
+      (p): p is string => typeof p === "string" && p.length > 0,
+    );
+    assert.ok(assetPaths.length > 0);
+    for (const relPath of assetPaths) {
+      assert.ok(existsSync(join(repoRoot, relPath)), `manifest asset missing: ${relPath}`);
+      assert.ok(isPackaged(relPath), `package.json#files must include ${relPath}`);
+    }
   });
 });

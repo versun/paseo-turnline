@@ -9,7 +9,7 @@ import {
   readAntigravityPrompt,
   readAntigravityUsage,
   resolveAntigravityConversationId,
-} from "../server/providers/antigravity";
+} from "../../../server/providers/antigravity";
 
 let dir: string;
 let dbPath: string;

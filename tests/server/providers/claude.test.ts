@@ -7,7 +7,7 @@ import {
   readClaudePrompt,
   readClaudeUsage,
   resolveClaudeSessionFile,
-} from "../server/providers/claude";
+} from "../../../server/providers/claude";
 
 let dir: string;
 

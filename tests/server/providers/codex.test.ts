@@ -7,7 +7,7 @@ import {
   readCodexPrompt,
   readCodexUsage,
   resolveCodexSessionFile,
-} from "../server/providers/codex";
+} from "../../../server/providers/codex";
 
 let dir: string;
 

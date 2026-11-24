@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { PluginTheme } from "@getpaseo/plugin";
-import { createThingsTokens, isDarkSurface, withAlpha } from "../client/theme-utils";
+import { createThingsTokens, isDarkSurface, withAlpha } from "../../client/theme-utils";
 
 const mockTheme = (surface0: string): PluginTheme => ({
   colors: {
