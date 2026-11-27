@@ -11,8 +11,9 @@
     "server/",
     "shared/",
     "assets/icon.png",
-    "assets/turns-panel.jpg",
-    "assets/prompt-context.png"
+    "assets/turns-panel.png",
+    "assets/prompt-context.png",
+    "assets/execution-trace.png"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",

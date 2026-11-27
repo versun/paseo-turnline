@@ -3,7 +3,7 @@
   "name": "Turnline",
   "description": "Inspect every agent turn in a workspace: prompt, thinking, tool calls, replies, token usage, and duration, on a reversible timeline.",
   "icon": "assets/icon.png",
-  "media": ["assets/turns-panel.jpg", "assets/prompt-context.png"],
+  "media": ["assets/turns-panel.png", "assets/prompt-context.png", "assets/execution-trace.png"],
   "requirements": {
     "paseo": ">=0.15.4"
   }
